@@ -1,0 +1,172 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  JIT Access Manager - Phase 1 Foundation Stack
+  Cognito (with an "approvers" group), the access-requests DynamoDB table,
+  a demo S3 bucket that stands in for "the protected resource" being
+  granted/revoked, the target IAM role that grants are attached to and
+  removed from, and an SNS notifications topic.
+
+  Design note: rather than accepting arbitrary IAM policy JSON from a
+  requester (unsafe to demo - a typo could grant real admin), this project
+  uses a small, fixed catalog of grantable permissions (see
+  02-compute-api.yaml's PERMISSION_CATALOG). The target role always starts
+  with zero inline policies; approve_access adds exactly one scoped policy
+  per approved grant, and revoke_access removes exactly that one policy.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: jit-access
+
+  EnvName:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, test, prod]
+
+Resources:
+
+  # ---------------- Cognito ----------------
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub "${ProjectName}-${EnvName}-users"
+      AutoVerifiedAttributes: [email]
+      UsernameAttributes: [email]
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+      Schema:
+        - Name: email
+          Required: true
+          Mutable: true
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub "${ProjectName}-${EnvName}-client"
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      AccessTokenValidity: 1
+      IdTokenValidity: 1
+      TokenValidityUnits:
+        AccessToken: hours
+        IdToken: hours
+
+  ApproversGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      UserPoolId: !Ref UserPool
+      GroupName: approvers
+      Description: Members can approve or deny access requests.
+
+  # ---------------- DynamoDB: request/audit log ----------------
+  RequestsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${ProjectName}-${EnvName}-requests"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: requestId
+          AttributeType: S
+        - AttributeName: requesterId
+          AttributeType: S
+        - AttributeName: status
+          AttributeType: S
+        - AttributeName: requestedAt
+          AttributeType: S
+      KeySchema:
+        - AttributeName: requestId
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: requester-index
+          KeySchema:
+            - AttributeName: requesterId
+              KeyType: HASH
+            - AttributeName: requestedAt
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: status-index
+          KeySchema:
+            - AttributeName: status
+              KeyType: HASH
+            - AttributeName: requestedAt
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      SSESpecification:
+        SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  # ---------------- Demo protected resource ----------------
+  DemoBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${ProjectName}-${EnvName}-demo-resource-${AWS::AccountId}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # ---------------- Target role: what grants attach to ----------------
+  TargetRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${EnvName}-target-role"
+      Description: >
+        Represents "elevated access". Starts with zero permissions.
+        approve_access/revoke_access add and remove exactly one scoped
+        inline policy per grant - this role never has standing access.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root" }
+            Action: sts:AssumeRole
+
+  # ---------------- SNS ----------------
+  NotificationsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${ProjectName}-${EnvName}-notifications"
+
+Outputs:
+  UserPoolId:
+    Value: !Ref UserPool
+    Export: { Name: !Sub "${ProjectName}-${EnvName}-UserPoolId" }
+  UserPoolClientId:
+    Value: !Ref UserPoolClient
+    Export: { Name: !Sub "${ProjectName}-${EnvName}-UserPoolClientId" }
+  RequestsTableName:
+    Value: !Ref RequestsTable
+    Export: { Name: !Sub "${ProjectName}-${EnvName}-RequestsTableName" }
+  RequestsTableArn:
+    Value: !GetAtt RequestsTable.Arn
+    Export: { Name: !Sub "${ProjectName}-${EnvName}-RequestsTableArn" }
+  DemoBucketName:
+    Value: !Ref DemoBucket
+    Export: { Name: !Sub "${ProjectName}-${EnvName}-DemoBucketName" }
+  DemoBucketArn:
+    Value: !GetAtt DemoBucket.Arn
+    Export: { Name: !Sub "${ProjectName}-${EnvName}-DemoBucketArn" }
+  TargetRoleName:
+    Value: !Ref TargetRole
+    Export: { Name: !Sub "${ProjectName}-${EnvName}-TargetRoleName" }
+  TargetRoleArn:
+    Value: !GetAtt TargetRole.Arn
+    Export: { Name: !Sub "${ProjectName}-${EnvName}-TargetRoleArn" }
+  NotificationsTopicArn:
+    Value: !Ref NotificationsTopic
+    Export: { Name: !Sub "${ProjectName}-${EnvName}-NotificationsTopicArn" }

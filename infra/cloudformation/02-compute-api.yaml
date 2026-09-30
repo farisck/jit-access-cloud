@@ -1,0 +1,475 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  JIT Access Manager - Phase 2 Compute & API Stack
+  Four Lambda functions (request, approve, revoke, list), an HTTP API with
+  a Cognito JWT authorizer, and an EventBridge Scheduler group used to
+  schedule each grant's automatic revocation. Imports outputs from
+  01-foundation.yaml.
+
+  NOTE: this template uses local-path `Code:` properties, which only
+  resolve after running `aws cloudformation package` (see repo README).
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: jit-access
+
+  EnvName:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, test, prod]
+
+  LogRetentionDays:
+    Type: Number
+    Default: 14
+
+  MaxDurationMinutes:
+    Type: Number
+    Default: 480
+    Description: Longest grant duration a requester may ask for (minutes).
+
+Resources:
+
+  # ---------------- EventBridge Scheduler group ----------------
+  # A dedicated group (rather than "default") keeps this project's
+  # schedules easy to find, list, and bulk-clean-up independently of
+  # anything else in the account.
+  ScheduleGroup:
+    Type: AWS::Scheduler::ScheduleGroup
+    Properties:
+      Name: !Sub "${ProjectName}-${EnvName}-revocations"
+
+  # Role EventBridge Scheduler assumes to invoke revoke_access. Scoped to
+  # invoking exactly that one function - nothing else.
+  SchedulerInvocationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${EnvName}-scheduler-invoke-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: scheduler.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: invoke-revoke-only
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt RevokeAccessFunction.Arn
+
+  # ---------------- IAM: one scoped role per function ----------------
+
+  RequestAccessRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${EnvName}-request-access-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: scoped-access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: WriteLogs
+                Effect: Allow
+                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+                Resource: "arn:aws:logs:*:*:*"
+              - Sid: WriteRequestsTable
+                Effect: Allow
+                Action: dynamodb:PutItem
+                Resource: !ImportValue
+                  Fn::Sub: "${ProjectName}-${EnvName}-RequestsTableArn"
+              - Sid: PublishNotifications
+                Effect: Allow
+                Action: sns:Publish
+                Resource: !ImportValue
+                  Fn::Sub: "${ProjectName}-${EnvName}-NotificationsTopicArn"
+
+  ApproveAccessRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${EnvName}-approve-access-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: scoped-access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: WriteLogs
+                Effect: Allow
+                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+                Resource: "arn:aws:logs:*:*:*"
+              - Sid: ReadWriteRequestsTable
+                Effect: Allow
+                Action: [dynamodb:GetItem, dynamodb:UpdateItem]
+                Resource: !ImportValue
+                  Fn::Sub: "${ProjectName}-${EnvName}-RequestsTableArn"
+              - Sid: GrantOnlyOnTargetRole
+                Effect: Allow
+                Action: iam:PutRolePolicy
+                Resource: !ImportValue
+                  Fn::Sub: "${ProjectName}-${EnvName}-TargetRoleArn"
+              - Sid: ScheduleRevocation
+                Effect: Allow
+                Action: scheduler:CreateSchedule
+                Resource: !Sub "arn:aws:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/${ScheduleGroup}/*"
+              - Sid: PassSchedulerInvocationRole
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt SchedulerInvocationRole.Arn
+                Condition:
+                  StringEquals: { "iam:PassedToService": "scheduler.amazonaws.com" }
+              - Sid: PublishNotifications
+                Effect: Allow
+                Action: sns:Publish
+                Resource: !ImportValue
+                  Fn::Sub: "${ProjectName}-${EnvName}-NotificationsTopicArn"
+
+  RevokeAccessRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${EnvName}-revoke-access-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: scoped-access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: WriteLogs
+                Effect: Allow
+                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+                Resource: "arn:aws:logs:*:*:*"
+              - Sid: ReadWriteRequestsTable
+                Effect: Allow
+                Action: [dynamodb:GetItem, dynamodb:UpdateItem]
+                Resource: !ImportValue
+                  Fn::Sub: "${ProjectName}-${EnvName}-RequestsTableArn"
+              - Sid: RevokeOnlyOnTargetRole
+                Effect: Allow
+                Action: iam:DeleteRolePolicy
+                Resource: !ImportValue
+                  Fn::Sub: "${ProjectName}-${EnvName}-TargetRoleArn"
+              - Sid: PublishNotifications
+                Effect: Allow
+                Action: sns:Publish
+                Resource: !ImportValue
+                  Fn::Sub: "${ProjectName}-${EnvName}-NotificationsTopicArn"
+
+  ListRequestsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${EnvName}-list-requests-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: scoped-access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: WriteLogs
+                Effect: Allow
+                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+                Resource: "arn:aws:logs:*:*:*"
+              - Sid: QueryRequestsTableAndIndexes
+                Effect: Allow
+                Action: dynamodb:Query
+                Resource:
+                  - !ImportValue
+                    Fn::Sub: "${ProjectName}-${EnvName}-RequestsTableArn"
+                  - !Sub
+                    - "${Arn}/index/*"
+                    - Arn: { Fn::ImportValue: !Sub "${ProjectName}-${EnvName}-RequestsTableArn" }
+
+  # ---------------- Lambda functions ----------------
+
+  RequestAccessFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${EnvName}-request-access"
+      Runtime: python3.12
+      Handler: app.handler
+      Timeout: 10
+      MemorySize: 256
+      Role: !GetAtt RequestAccessRole.Arn
+      Code: ../../lambda/request_access
+      Environment:
+        Variables:
+          REQUESTS_TABLE_NAME: !ImportValue
+            Fn::Sub: "${ProjectName}-${EnvName}-RequestsTableName"
+          NOTIFICATIONS_TOPIC_ARN: !ImportValue
+            Fn::Sub: "${ProjectName}-${EnvName}-NotificationsTopicArn"
+          MAX_DURATION_MINUTES: !Ref MaxDurationMinutes
+          PERMISSION_CATALOG_KEYS: '["s3-read-demo-bucket","dynamodb-read-requests"]'
+
+  RequestAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${RequestAccessFunction}"
+      RetentionInDays: !Ref LogRetentionDays
+
+  RevokeAccessFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${EnvName}-revoke-access"
+      Runtime: python3.12
+      Handler: app.handler
+      Timeout: 15
+      MemorySize: 256
+      Role: !GetAtt RevokeAccessRole.Arn
+      Code: ../../lambda/revoke_access
+      Environment:
+        Variables:
+          REQUESTS_TABLE_NAME: !ImportValue
+            Fn::Sub: "${ProjectName}-${EnvName}-RequestsTableName"
+          NOTIFICATIONS_TOPIC_ARN: !ImportValue
+            Fn::Sub: "${ProjectName}-${EnvName}-NotificationsTopicArn"
+          TARGET_ROLE_NAME: !ImportValue
+            Fn::Sub: "${ProjectName}-${EnvName}-TargetRoleName"
+
+  RevokeAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${RevokeAccessFunction}"
+      RetentionInDays: !Ref LogRetentionDays
+
+  ApproveAccessFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${EnvName}-approve-access"
+      Runtime: python3.12
+      Handler: app.handler
+      Timeout: 15
+      MemorySize: 256
+      Role: !GetAtt ApproveAccessRole.Arn
+      Code: ../../lambda/approve_access
+      Environment:
+        Variables:
+          REQUESTS_TABLE_NAME: !ImportValue
+            Fn::Sub: "${ProjectName}-${EnvName}-RequestsTableName"
+          NOTIFICATIONS_TOPIC_ARN: !ImportValue
+            Fn::Sub: "${ProjectName}-${EnvName}-NotificationsTopicArn"
+          TARGET_ROLE_NAME: !ImportValue
+            Fn::Sub: "${ProjectName}-${EnvName}-TargetRoleName"
+          REVOKE_FUNCTION_ARN: !GetAtt RevokeAccessFunction.Arn
+          SCHEDULER_ROLE_ARN: !GetAtt SchedulerInvocationRole.Arn
+          SCHEDULE_GROUP_NAME: !Ref ScheduleGroup
+          PERMISSION_CATALOG: !Sub
+            - >-
+              {"s3-read-demo-bucket":{"Effect":"Allow","Action":["s3:GetObject","s3:ListBucket"],"Resource":["${DemoBucketArn}","${DemoBucketArn}/*"]},"dynamodb-read-requests":{"Effect":"Allow","Action":["dynamodb:GetItem","dynamodb:Query"],"Resource":["${RequestsTableArn}","${RequestsTableArn}/index/*"]}}
+            - DemoBucketArn: !ImportValue
+                Fn::Sub: "${ProjectName}-${EnvName}-DemoBucketArn"
+              RequestsTableArn: !ImportValue
+                Fn::Sub: "${ProjectName}-${EnvName}-RequestsTableArn"
+
+  ApproveAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ApproveAccessFunction}"
+      RetentionInDays: !Ref LogRetentionDays
+
+  ListRequestsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${EnvName}-list-requests"
+      Runtime: python3.12
+      Handler: app.handler
+      Timeout: 10
+      MemorySize: 256
+      Role: !GetAtt ListRequestsRole.Arn
+      Code: ../../lambda/list_requests
+      Environment:
+        Variables:
+          REQUESTS_TABLE_NAME: !ImportValue
+            Fn::Sub: "${ProjectName}-${EnvName}-RequestsTableName"
+          REQUESTER_INDEX_NAME: requester-index
+          STATUS_INDEX_NAME: status-index
+
+  ListRequestsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ListRequestsFunction}"
+      RetentionInDays: !Ref LogRetentionDays
+
+  # ---------------- HTTP API + Cognito JWT authorizer ----------------
+
+  HttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub "${ProjectName}-${EnvName}-api"
+      ProtocolType: HTTP
+      CorsConfiguration:
+        AllowOrigins: ["*"]
+        AllowMethods: [GET, POST, DELETE, OPTIONS]
+        AllowHeaders: [Content-Type, Authorization]
+
+  CognitoAuthorizer:
+    Type: AWS::ApiGatewayV2::Authorizer
+    Properties:
+      ApiId: !Ref HttpApi
+      Name: !Sub "${ProjectName}-${EnvName}-cognito-jwt"
+      AuthorizerType: JWT
+      IdentitySource: ["$request.header.Authorization"]
+      JwtConfiguration:
+        Audience:
+          - !ImportValue
+            Fn::Sub: "${ProjectName}-${EnvName}-UserPoolClientId"
+        Issuer: !Sub
+          - "https://cognito-idp.${AWS::Region}.amazonaws.com/${PoolId}"
+          - PoolId: !ImportValue
+              Fn::Sub: "${ProjectName}-${EnvName}-UserPoolId"
+
+  # POST /requests -> request_access
+  RequestAccessIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt RequestAccessFunction.Arn
+      PayloadFormatVersion: "2.0"
+
+  CreateRequestRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "POST /requests"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref CognitoAuthorizer
+      Target: !Sub "integrations/${RequestAccessIntegration}"
+
+  RequestAccessInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref RequestAccessFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*/*"
+
+  # GET /requests -> list_requests
+  ListRequestsIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt ListRequestsFunction.Arn
+      PayloadFormatVersion: "2.0"
+
+  ListRequestsRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "GET /requests"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref CognitoAuthorizer
+      Target: !Sub "integrations/${ListRequestsIntegration}"
+
+  ListRequestsInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ListRequestsFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*/*"
+
+  # POST /requests/{requestId}/approve -> approve_access
+  ApproveAccessIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt ApproveAccessFunction.Arn
+      PayloadFormatVersion: "2.0"
+
+  ApproveRequestRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "POST /requests/{requestId}/approve"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref CognitoAuthorizer
+      Target: !Sub "integrations/${ApproveAccessIntegration}"
+
+  ApproveAccessInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ApproveAccessFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*/*"
+
+  # DELETE /requests/{requestId} -> revoke_access (manual early revoke)
+  RevokeAccessIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt RevokeAccessFunction.Arn
+      PayloadFormatVersion: "2.0"
+
+  DeleteRequestRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "DELETE /requests/{requestId}"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref CognitoAuthorizer
+      Target: !Sub "integrations/${RevokeAccessIntegration}"
+
+  RevokeAccessApiInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref RevokeAccessFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*/*"
+
+  # EventBridge Scheduler's own invoke permission (separate from the API
+  # Gateway one above - two different principals, both need their own grant)
+  RevokeAccessSchedulerInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref RevokeAccessFunction
+      Action: lambda:InvokeFunction
+      Principal: scheduler.amazonaws.com
+      SourceArn: !Sub "arn:aws:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/${ScheduleGroup}/*"
+
+  HttpApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref HttpApi
+      StageName: "$default"
+      AutoDeploy: true
+
+Outputs:
+  ApiEndpoint:
+    Description: Base URL of the HTTP API
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+    Export: { Name: !Sub "${ProjectName}-${EnvName}-ApiEndpoint" }
+  RequestAccessFunctionName:
+    Value: !Ref RequestAccessFunction
+  ApproveAccessFunctionName:
+    Value: !Ref ApproveAccessFunction
+  RevokeAccessFunctionName:
+    Value: !Ref RevokeAccessFunction
+  ListRequestsFunctionName:
+    Value: !Ref ListRequestsFunction
