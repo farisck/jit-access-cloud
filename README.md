@@ -6,10 +6,11 @@ An employee requests a specific, time-boxed elevated permission. A manager
 approves or denies it. If approved, the permission is granted immediately
 and **automatically revoked at the exact requested expiry**, with no manual
 cleanup step anyone could forget. Every request, grant, and revocation is
-logged twice — once in the app's own audit trail, once independently in
-CloudTrail — so the two can be cross-checked.
+logged in DynamoDB. CloudTrail cross-referencing of the same events is
+designed into the architecture but not yet deployed (see Status below).
 
 📄 Full proposal: [`docs/JIT_Access_Manager_Proposal.docx`](docs/JIT_Access_Manager_Proposal.docx)
+🖥️ Frontend: [`frontend/index.html`](frontend/index.html) — a standalone dashboard, no build step required
 
 ## Why this design is safe to run in a real AWS account
 
@@ -35,16 +36,21 @@ Manager  → Cognito → API Gateway → approve_access  → IAM (grant) + Event
                                                     ↓ (at expiry, automatically)
                                         EventBridge Scheduler → revoke_access → IAM (revoke) → DynamoDB (expired)
                                                                               ↓
-                                                    CloudWatch · CloudTrail · SNS · Budgets
+                                                    CloudWatch (deployed) · CloudTrail & Budgets (planned)
 ```
+
+Both the employee and manager can also use `frontend/index.html` instead of
+calling the API directly — see **Frontend** below.
 
 ## Status
 
 | Phase | What it builds | Status |
 |---|---|---|
-| 1 — Foundation | Cognito (+ approvers group), requests table, demo bucket, target IAM role, SNS | 🔜 Ready to deploy |
-| 2 — Compute | 4 Lambdas, HTTP API, Cognito authorizer, EventBridge Scheduler wiring | 🔜 Ready to deploy |
-| 3 — Monitoring | CloudWatch alarms (especially on failed revocations), CloudTrail, Budgets | ✅ Failed-revocation alarm complete; CloudTrail and Budgets planned |
+| 1 — Foundation | Cognito (+ approvers group), requests table, demo bucket, target IAM role, SNS | ✅ Deployed |
+| 2 — Compute | 4 Lambdas, HTTP API, Cognito authorizer, EventBridge Scheduler wiring | ✅ Deployed and tested end-to-end |
+| 3 — Monitoring | CloudWatch alarm on failed revocations | ✅ Deployed and tested |
+| 3 — Monitoring (cont.) | CloudTrail cross-referencing, AWS Budgets | 🔜 Planned, not yet deployed |
+| Frontend | Standalone employee/manager dashboard | ✅ Built and tested |
 
 ## Repo layout
 
@@ -52,14 +58,18 @@ Manager  → Cognito → API Gateway → approve_access  → IAM (grant) + Event
 jit-access-cloud/
 ├── infra/cloudformation/
 │   ├── 01-foundation.yaml    # Cognito, DynamoDB, demo bucket, target role, SNS
-│   └── 02-compute-api.yaml   # 4 Lambdas + HTTP API + Cognito authorizer + Scheduler
+│   ├── 02-compute-api.yaml   # 4 Lambdas + HTTP API + Cognito authorizer + Scheduler
+│   └── 03-monitoring.yaml    # CloudWatch alarm on failed revocations
 ├── lambda/
 │   ├── request_access/       # POST /requests
 │   ├── approve_access/       # POST /requests/{id}/approve — the core grant logic
 │   ├── revoke_access/        # DELETE /requests/{id} (manual) + EventBridge target (automatic)
 │   └── list_requests/        # GET /requests[?status=pending]
+├── frontend/
+│   └── index.html            # Standalone employee/manager dashboard (no build step)
 ├── docs/
 │   ├── JIT_Access_Manager_Proposal.docx
+│   ├── DEMO.md                # Full step-by-step demo walkthrough
 │   └── architecture.png
 ```
 
@@ -98,6 +108,13 @@ aws cloudformation deploy \
 # Get the API endpoint
 aws cloudformation describe-stacks --stack-name jit-access-dev-compute \
   --query "Stacks[0].Outputs" --region us-east-1
+
+# Phase 3 — Monitoring (CloudWatch alarm on failed revocations)
+aws cloudformation deploy \
+  --template-file infra/cloudformation/03-monitoring.yaml \
+  --stack-name jit-access-dev-monitoring \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --region us-east-1
 ```
 
 ## Setting up a demo requester and approver
@@ -123,21 +140,43 @@ aws cognito-idp admin-add-user-to-group --user-pool-id $POOL_ID --username manag
   --group-name approvers --region us-east-1
 ```
 
+## Frontend
+
+A standalone dashboard at `frontend/index.html` — no build step, no npm
+install required for the app itself. Run it locally with:
+
+```bash
+npx serve frontend
+```
+
+Then open `http://localhost:3000`. Keep the terminal running while testing.
+
+The dashboard shows different sections depending on who's logged in:
+- **Employee login** — "Request Temporary Access" form and "My Requests" history
+- **Manager login** (must be in the `approvers` Cognito group) — "Pending Access Requests" queue and "Active Access" list with a revoke action
+
 ## Demo flow
 
-1. Sign in as the employee, `POST /requests` with `{"permission": "s3-read-demo-bucket", "reason": "debugging", "durationMinutes": 5}`
-2. Sign in as the manager, `POST /requests/{requestId}/approve` with `{"decision": "approve"}`
-3. Immediately after: `aws iam list-role-policies --role-name jit-access-dev-target-role` — the grant is there
-4. Wait 5+ minutes (or whatever duration you used)
-5. `aws iam list-role-policies --role-name jit-access-dev-target-role` again — the grant is gone, with no manual step taken
-6. Check DynamoDB — the request's status moved from `pending` → `active` → `expired`, each with a timestamp
-7. Check CloudTrail for the same two IAM events, independently confirming the grant and revocation
+For the full 9-step walkthrough (including IAM verification commands and
+the automatic-expiry check), see [`docs/DEMO.md`](docs/DEMO.md). Quick
+version:
+
+1. Sign in as the employee (via the frontend, or `POST /requests` directly) and submit a request
+2. Sign in as the manager and approve it
+3. Confirm the grant is real: `aws iam list-role-policies --role-name jit-access-dev-target-role`
+4. Wait for the requested duration to pass
+5. Run the same IAM command again — the policy is gone, with no manual step taken
+6. Check DynamoDB — the request's status moved `pending` → `active` → `expired`, each with a timestamp
 
 ## Tearing down
 
 ```bash
+aws cloudformation delete-stack --stack-name jit-access-dev-monitoring --region us-east-1
+aws cloudformation wait stack-delete-complete --stack-name jit-access-dev-monitoring --region us-east-1
+
 aws cloudformation delete-stack --stack-name jit-access-dev-compute --region us-east-1
 aws cloudformation wait stack-delete-complete --stack-name jit-access-dev-compute --region us-east-1
+
 aws cloudformation delete-stack --stack-name jit-access-dev-foundation --region us-east-1
 ```
 
@@ -147,6 +186,7 @@ The Lambda artifacts bucket isn't managed by any stack — delete it manually:
 ## Cost notes
 
 Designed to run inside AWS Free Tier — everything here (Lambda, DynamoDB,
-API Gateway, EventBridge Scheduler, SNS, Cognito) has a generous always-free
-or 12-month-free allowance. No CloudFront, no NAT Gateway, no customer-
-managed KMS key by default.
+API Gateway, EventBridge Scheduler, SNS, Cognito, CloudWatch) has a generous
+always-free or 12-month-free allowance. No CloudFront, no NAT Gateway, no
+customer-managed KMS key — the DynamoDB table uses its default AWS-owned
+encryption key, which carries no additional charge.
