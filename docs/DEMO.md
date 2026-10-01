@@ -21,6 +21,8 @@ $TOKEN = Get-IdToken "manager@example.com"  "<manager-password>"
 
 Test users live in the dev Cognito pool only. Do not commit their passwords.
 
+Request submission, approval or denial, and successful manual or scheduled revocation each publish a notification to the SNS topic. Email delivery requires a confirmed email subscription to that topic.
+
 ## 1. Baseline: the target role has no permissions
 
 ```powershell
@@ -97,8 +99,12 @@ Invoke-RestMethod -Method Post -Uri "$API/requests/$($new.requestId)/approve" `
   -Headers @{ Authorization = "Bearer $TOKEN" } -ContentType "application/json" `
   -Body '{"decision":"approve"}'
 
+aws iam list-role-policies --role-name jit-access-dev-target-role
+
 Invoke-RestMethod -Method Delete -Uri "$API/requests/$($new.requestId)" `
   -Headers @{ Authorization = "Bearer $TOKEN" }
+
+aws iam list-role-policies --role-name jit-access-dev-target-role
 ```
 
 Expected: `status: revoked_early`, the policy disappears immediately, and the row shows the manager in `revokedBy`. The original schedule still fires later and is a harmless no-op, because `revoke_access` is idempotent.
@@ -106,7 +112,9 @@ Expected: `status: revoked_early`, the policy disappears immediately, and the ro
 ## 8. Employee views their own history
 
 ```powershell
-Invoke-RestMethod -Uri "$API/requests" -Headers @{ Authorization = "Bearer $EMP" }
+Invoke-RestMethod -Uri "$API/requests" -Headers @{ Authorization = "Bearer $EMP" } |
+  Select-Object -ExpandProperty requests |
+  Select-Object requestId, permission, status, expiresAt, revokedAt
 ```
 
 ## 9. Failed-revocation alarm
