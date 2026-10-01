@@ -44,7 +44,7 @@ Manager  → Cognito → API Gateway → approve_access  → IAM (grant) + Event
 |---|---|---|
 | 1 — Foundation | Cognito (+ approvers group), requests table, demo bucket, target IAM role, SNS | 🔜 Ready to deploy |
 | 2 — Compute | 4 Lambdas, HTTP API, Cognito authorizer, EventBridge Scheduler wiring | 🔜 Ready to deploy |
-| 3 — Monitoring | CloudWatch alarms (especially on failed revocations), CloudTrail, Budgets | 🔜 Planned |
+| 3 — Monitoring | CloudWatch alarms (especially on failed revocations), CloudTrail, Budgets | ✅ Failed-revocation alarm complete; CloudTrail and Budgets planned |
 
 ## Repo layout
 
