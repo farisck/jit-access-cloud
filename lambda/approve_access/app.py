@@ -66,13 +66,33 @@ def _policy_name(request_id):
     return f"jit-grant-{request_id}"
 
 
+def _parse_groups_claim(groups_raw):
+    """
+    Cognito's ID token has cognito:groups as a real JSON array, e.g.
+    ["approvers"]. But API Gateway's HTTP API JWT authorizer flattens all
+    claims into a string-only map before handing them to Lambda, and for
+    array claims it uses Java's array toString format - literal square
+    brackets, comma-space separated, NOT JSON (e.g. "[approvers]" or
+    "[approvers, admins]" for multiple groups, or "[]" for none). A naive
+    comma-split leaves the brackets attached to the token's first/last
+    entry, so "approvers" never matches "[approvers]" and every approver
+    gets incorrectly denied. This strips the brackets before splitting.
+    """
+    if isinstance(groups_raw, list):
+        return groups_raw
+    cleaned = str(groups_raw).strip()
+    if cleaned.startswith("[") and cleaned.endswith("]"):
+        cleaned = cleaned[1:-1]
+    return [g.strip() for g in cleaned.split(",") if g.strip()]
+
+
 def handler(event, context):
     try:
         claims = event["requestContext"]["authorizer"]["jwt"]["claims"]
         approver_id = claims["sub"]
         approver_email = claims.get("email", "")
         groups_raw = claims.get("cognito:groups", "")
-        groups = groups_raw if isinstance(groups_raw, list) else [g.strip() for g in str(groups_raw).split(",") if g]
+        groups = _parse_groups_claim(groups_raw)
     except (KeyError, TypeError):
         return _response(401, {"message": "Missing or invalid authorization token"})
 

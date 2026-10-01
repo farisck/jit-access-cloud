@@ -52,6 +52,22 @@ def _is_api_gateway_event(event):
     return isinstance(event, dict) and "requestContext" in event and "http" in event.get("requestContext", {})
 
 
+def _parse_groups_claim(groups_raw):
+    """
+    See approve_access/app.py for the full explanation: API Gateway's HTTP
+    API JWT authorizer stringifies array claims using Java's array
+    toString format (literal brackets, e.g. "[approvers]"), not JSON, so a
+    naive comma-split leaves brackets attached and breaks membership
+    checks. This strips them first.
+    """
+    if isinstance(groups_raw, list):
+        return groups_raw
+    cleaned = str(groups_raw).strip()
+    if cleaned.startswith("[") and cleaned.endswith("]"):
+        cleaned = cleaned[1:-1]
+    return [g.strip() for g in cleaned.split(",") if g.strip()]
+
+
 def _revoke(request_id, reason, actor):
     item_resp = table.get_item(Key={"requestId": request_id})
     item = item_resp.get("Item")
@@ -122,7 +138,7 @@ def handler(event, context):
             caller_id = claims["sub"]
             caller_email = claims.get("email", "")
             groups_raw = claims.get("cognito:groups", "")
-            groups = groups_raw if isinstance(groups_raw, list) else [g.strip() for g in str(groups_raw).split(",") if g]
+            groups = _parse_groups_claim(groups_raw)
         except (KeyError, TypeError):
             return _api_response(401, {"message": "Missing or invalid authorization token"})
 
