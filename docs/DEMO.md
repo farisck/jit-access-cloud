@@ -89,6 +89,14 @@ Expected: `PolicyNames` is empty, and the row shows `status: expired` and `revok
 Create a 10-minute request, approve it as the manager, then revoke it:
 
 ```powershell
+$new = Invoke-RestMethod -Method Post -Uri "$API/requests" `
+  -Headers @{ Authorization = "Bearer $EMP" } -ContentType "application/json" `
+  -Body '{"permission":"s3-read-demo-bucket","durationMinutes":10,"reason":"early revoke demo"}'
+
+Invoke-RestMethod -Method Post -Uri "$API/requests/$($new.requestId)/approve" `
+  -Headers @{ Authorization = "Bearer $TOKEN" } -ContentType "application/json" `
+  -Body '{"decision":"approve"}'
+
 Invoke-RestMethod -Method Delete -Uri "$API/requests/$($new.requestId)" `
   -Headers @{ Authorization = "Bearer $TOKEN" }
 ```
