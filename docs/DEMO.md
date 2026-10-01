@@ -101,9 +101,20 @@ Expected: `status: revoked_early`, the policy disappears immediately, and the ro
 Invoke-RestMethod -Uri "$API/requests" -Headers @{ Authorization = "Bearer $EMP" }
 ```
 
+## 9. Failed-revocation alarm
+
+Force the alarm state to demonstrate the notification path:
+
+```powershell
+aws cloudwatch set-alarm-state --alarm-name jit-access-dev-revoke-failed `
+  --state-value ALARM --state-reason "demo test" --region us-east-1
+```
+
+Expected: an `ALARM: "jit-access-dev-revoke-failed"` email within a minute, provided the SNS topic has a confirmed email subscription. In production, the alarm fires when the `revoke_access` Lambda reports an error, indicating that a privileged grant may still be active.
+
 ## Key design points to mention
 
 - Requests come from a fixed catalog of safe, read-only permissions, never arbitrary IAM JSON.
 - Approval attaches one scoped inline policy and creates the EventBridge Scheduler revoke in the same action.
 - Every request keeps an audit trail: requester, approver, timestamps, and who revoked it.
-- Genuine IAM failures during revocation are re-raised so they surface as Lambda errors (alarm planned in Phase 3).
+- Genuine IAM failures during revocation are re-raised so they surface as Lambda errors and trigger the CloudWatch alarm.
