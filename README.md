@@ -6,8 +6,17 @@ An employee requests a specific, time-boxed elevated permission. A manager
 approves or denies it. If approved, the permission is granted immediately
 and **automatically revoked at the exact requested expiry**, with no manual
 cleanup step anyone could forget. Every request, grant, and revocation is
-logged in DynamoDB. CloudTrail cross-referencing of the same events is
-designed into the architecture but not yet deployed (see Status below).
+logged in DynamoDB, and independently visible in the account's CloudTrail
+history (see note below).
+
+> **Note on CloudTrail and Budgets:** this project doesn't deploy its own
+> trail or budget. Both services operate at the AWS account level, not
+> per-project, and this account already has a multi-region CloudTrail and
+> a monthly Budget (originally set up for a separate project). Since they
+> already capture every API call and every dollar spent account-wide, a
+> second, JIT-specific trail and budget would be redundant. Confirmed by
+> directly querying CloudTrail for this project's own `PutRolePolicy` and
+> `DeleteRolePolicy` events — both show up correctly.
 
 📄 Full proposal: [`docs/JIT_Access_Manager_Proposal.docx`](docs/JIT_Access_Manager_Proposal.docx)
 🖥️ Frontend: [`frontend/index.html`](frontend/index.html) — a standalone dashboard, no build step required
@@ -49,7 +58,7 @@ calling the API directly — see **Frontend** below.
 | 1 — Foundation | Cognito (+ approvers group), requests table, demo bucket, target IAM role, SNS | ✅ Deployed |
 | 2 — Compute | 4 Lambdas, HTTP API, Cognito authorizer, EventBridge Scheduler wiring | ✅ Deployed and tested end-to-end |
 | 3 — Monitoring | CloudWatch alarm on failed revocations | ✅ Deployed and tested |
-| 3 — Monitoring (cont.) | CloudTrail cross-referencing, AWS Budgets | 🔜 Planned, not yet deployed |
+| 3 — Monitoring (cont.) | CloudTrail, AWS Budgets | ✅ Covered by an existing account-wide trail and budget (see note below) — confirmed by querying CloudTrail directly for this project's IAM events |
 | Frontend | Standalone employee/manager dashboard | ✅ Built and tested |
 
 ## Repo layout
