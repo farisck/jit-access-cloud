@@ -36,7 +36,7 @@ Expected: `"PolicyNames": []`
 ```powershell
 $new = Invoke-RestMethod -Method Post -Uri "$API/requests" `
   -Headers @{ Authorization = "Bearer $EMP" } -ContentType "application/json" `
-  -Body '{"permission":"s3-read-demo-bucket","durationMinutes":2,"reason":"demo walkthrough"}'
+  -Body '{"permission":"s3-read-demo-bucket","durationMinutes":15,"reason":"demo walkthrough"}'
 $new
 ```
 
@@ -76,24 +76,31 @@ Expected: one policy named `jit-grant-<requestId>`.
 
 ## 6. Automatic revocation
 
-Wait for the duration to pass (about 2 minutes), with no manual action, then:
+Wait for the 15-minute duration to pass, with no manual action, then:
 
 ```powershell
 aws iam list-role-policies --role-name jit-access-dev-target-role
-aws dynamodb get-item --table-name jit-access-dev-requests `
-  --key ('{\"requestId\":{\"S\":\"' + $new.requestId + '\"}}') --region us-east-1
+Invoke-RestMethod -Uri "$API/requests" `
+  -Headers @{ Authorization = "Bearer $EMP" } |
+  Select-Object -ExpandProperty requests |
+  Select-Object requestId, status, expiresAt, revokedAt, revokedBy
 ```
 
-Expected: `PolicyNames` is empty, and the row shows `status: expired` and `revokedBy: scheduler`.
+Expected: `PolicyNames` is empty. The request row shows:
+
+```text
+status    : expired
+revokedBy : scheduler
+```
 
 ## 7. Manual early revoke
 
-Create a 10-minute request, approve it as the manager, then revoke it:
+Create a 15-minute request, approve it as the manager, then revoke it:
 
 ```powershell
 $new = Invoke-RestMethod -Method Post -Uri "$API/requests" `
   -Headers @{ Authorization = "Bearer $EMP" } -ContentType "application/json" `
-  -Body '{"permission":"s3-read-demo-bucket","durationMinutes":10,"reason":"early revoke demo"}'
+  -Body '{"permission":"s3-read-demo-bucket","durationMinutes":15,"reason":"early revoke demo"}'
 
 Invoke-RestMethod -Method Post -Uri "$API/requests/$($new.requestId)/approve" `
   -Headers @{ Authorization = "Bearer $TOKEN" } -ContentType "application/json" `
