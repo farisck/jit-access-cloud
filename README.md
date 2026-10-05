@@ -138,13 +138,13 @@ CLIENT_ID=$(aws cloudformation describe-stacks --stack-name jit-access-dev-found
 aws cognito-idp admin-create-user --user-pool-id $POOL_ID --username employee@example.com \
   --temporary-password 'TempPass123!' --message-action SUPPRESS --region us-east-1
 aws cognito-idp admin-set-user-password --user-pool-id $POOL_ID --username employee@example.com \
-  --password 'RealPass123!' --permanent --region us-east-1
+  --password '<your-password>' --permanent --region us-east-1
 
 # Approver — same steps, then add to the approvers group
 aws cognito-idp admin-create-user --user-pool-id $POOL_ID --username manager@example.com \
   --temporary-password 'TempPass123!' --message-action SUPPRESS --region us-east-1
 aws cognito-idp admin-set-user-password --user-pool-id $POOL_ID --username manager@example.com \
-  --password 'RealPass123!' --permanent --region us-east-1
+  --password '<your-password>' --permanent --region us-east-1
 aws cognito-idp admin-add-user-to-group --user-pool-id $POOL_ID --username manager@example.com \
   --group-name approvers --region us-east-1
 ```
