@@ -114,6 +114,7 @@ def handler(event, context):
             "decidedBy": i.get("decidedBy"),
             "expiresAt": i.get("expiresAt"),
             "revokedAt": i.get("revokedAt"),
+            "revokedBy": i.get("revokedBy"),
         }
         for i in result.get("Items", [])
     ]
