@@ -23,6 +23,40 @@ Test users live in the dev Cognito pool only. Do not commit their passwords.
 
 Request submission, approval or denial, and successful manual or scheduled revocation each publish a notification to the SNS topic. Email delivery requires a confirmed email subscription to that topic.
 
+## Public Frontend Deployment
+
+The JIT Access Manager frontend is publicly hosted using Amazon S3 and Amazon CloudFront.
+
+The frontend `index.html` is stored in a private S3 bucket:
+
+`jit-access-dev-frontend-921049725652`
+
+Amazon CloudFront is configured to use the S3 bucket as its origin and serves the frontend over HTTPS.
+
+CloudFront distribution:
+
+- Distribution ID: `EWMBBAFBT5WS4`
+- CloudFront domain: `dhdhrgszajmez.cloudfront.net`
+- Default root object: `index.html`
+
+A custom domain was configured for public access:
+
+`https://jit.barfs.shop`
+
+AWS Certificate Manager (ACM) provides the SSL/TLS certificate for `jit.barfs.shop`. The certificate was created in the `us-east-1` region, as required for CloudFront.
+
+The custom domain is configured in GoDaddy DNS using the following CNAME record:
+
+```text
+jit.barfs.shop → dhdhrgszajmez.cloudfront.net
+```
+
+The deployment was verified by accessing the application through the custom HTTPS domain. Employee and manager login functionality were tested successfully, confirming that the public frontend can communicate with the existing API Gateway and backend AWS services without requiring localhost.
+
+The final public frontend URL is:
+
+`https://jit.barfs.shop`
+
 ## 1. Baseline: the target role has no permissions
 
 ```powershell
