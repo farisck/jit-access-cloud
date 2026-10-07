@@ -25,5 +25,12 @@ jobs:
       - name: Install Python dependencies
         run: pip install boto3
 
+      - name: Test Lambda imports
+        run: |
+          python -c "import sys; sys.path.insert(0, 'lambda/approve_access'); import app"
+          python -c "import sys; sys.path.insert(0, 'lambda/list_requests'); import app"
+          python -c "import sys; sys.path.insert(0, 'lambda/request_access'); import app"
+          python -c "import sys; sys.path.insert(0, 'lambda/revoke_access'); import app"
+
       - name: Check Python syntax
         run: python -m compileall lambda
