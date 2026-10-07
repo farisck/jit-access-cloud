@@ -14,6 +14,7 @@ jobs:
       TARGET_ROLE_NAME: ci-test-target-role
       REVOKE_FUNCTION_ARN: arn:aws:lambda:us-east-1:000000000000:function:ci-test-revoke
       SCHEDULER_ROLE_ARN: arn:aws:iam::000000000000:role/ci-test-scheduler-role
+      SCHEDULE_GROUP_NAME: ci-test-schedule-group
 
     steps:
       - name: Checkout repository
