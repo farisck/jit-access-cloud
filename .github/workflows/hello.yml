@@ -22,5 +22,8 @@ jobs:
       - name: Check Python version
         run: python --version
 
+      - name: Install Python dependencies
+        run: pip install boto3
+
       - name: Check Python syntax
         run: python -m compileall lambda
