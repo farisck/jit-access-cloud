@@ -11,5 +11,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: List project files
+        run: ls
+
       - name: Say Hello
         run: echo "GitHub Actions is working!"
