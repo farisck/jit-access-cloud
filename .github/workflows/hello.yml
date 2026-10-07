@@ -1,0 +1,12 @@
+name: JIT Access CI
+
+on:
+  push:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Say Hello
+        run: echo "GitHub Actions is working!"
