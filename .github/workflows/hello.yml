@@ -9,6 +9,7 @@ jobs:
 
     env:
       AWS_DEFAULT_REGION: us-east-1
+      REQUESTS_TABLE_NAME: ci-test-table
 
     steps:
       - name: Checkout repository
