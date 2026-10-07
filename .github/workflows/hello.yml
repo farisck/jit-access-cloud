@@ -11,6 +11,7 @@ jobs:
       AWS_DEFAULT_REGION: us-east-1
       REQUESTS_TABLE_NAME: ci-test-table
       NOTIFICATIONS_TOPIC_ARN: arn:aws:sns:us-east-1:000000000000:ci-test-topic
+      TARGET_ROLE_NAME: ci-test-target-role
 
     steps:
       - name: Checkout repository
