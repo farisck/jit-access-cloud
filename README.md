@@ -1,3 +1,5 @@
+![Coverage](https://img.shields.io/badge/coverage-96%25-brightgreen)
+
 # JIT Access Manager
 
 A just-in-time privileged access platform on AWS — Cloud Computing capstone project.
