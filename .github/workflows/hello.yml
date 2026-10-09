@@ -47,6 +47,18 @@ jobs:
       - name: Run unit tests with coverage
         run: python -m coverage run --include="lambda/*/app.py" -m unittest discover -s tests -v
 
+      - name: Generate Codecov XML report
+        if: success()
+        run: python -m coverage xml -o coverage.xml
+
+      - name: Upload coverage to Codecov
+        if: success()
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.xml
+          fail_ci_if_error: true
+
       - name: Display coverage report
         if: always()
         run: python -m coverage report -m
