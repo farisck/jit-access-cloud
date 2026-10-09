@@ -205,3 +205,102 @@ class RevokeAccessTests(unittest.TestCase):
         self.assertEqual(result["status"], "expired")
         self.iam.delete_role_policy.assert_called_once()
         self.table.update_item.assert_called_once()
+
+    def test_non_owner_non_approver_returns_403(self):
+        self.table.get_item.return_value = {
+            "Item": {
+                "requestId": "req-123",
+                "requesterId": "another-user",
+                "status": "active",
+            }
+        }
+
+        event = {
+            "requestContext": {
+                "http": {"method": "DELETE"},
+                "authorizer": {
+                    "jwt": {
+                        "claims": {
+                            "sub": "user-123",
+                            "email": "user@example.com",
+                            "cognito:groups": "employees",
+                        }
+                    }
+                },
+            },
+            "pathParameters": {"requestId": "req-123"},
+        }
+
+        response = app.handler(event, None)
+
+        self.assertEqual(response["statusCode"], 403)
+
+    def test_api_request_not_found_returns_404(self):
+        self.table.get_item.return_value = {}
+
+        event = {
+            "requestContext": {
+                "http": {"method": "DELETE"},
+                "authorizer": {
+                    "jwt": {
+                        "claims": {"sub": "user-123"}
+                    }
+                },
+            },
+            "pathParameters": {"requestId": "req-123"},
+        }
+
+        response = app.handler(event, None)
+
+        self.assertEqual(response["statusCode"], 404)
+
+    def test_api_missing_request_id_returns_400(self):
+        event = {
+            "requestContext": {
+                "http": {"method": "DELETE"},
+                "authorizer": {
+                    "jwt": {
+                        "claims": {"sub": "user-123"}
+                    }
+                },
+            },
+            "pathParameters": {},
+        }
+
+        response = app.handler(event, None)
+
+        self.assertEqual(response["statusCode"], 400)
+
+    def test_api_missing_authorization_returns_401(self):
+        event = {
+            "requestContext": {
+                "http": {"method": "DELETE"},
+            },
+            "pathParameters": {"requestId": "req-123"},
+        }
+
+        response = app.handler(event, None)
+
+        self.assertEqual(response["statusCode"], 401)
+
+    def test_missing_policy_is_treated_as_success(self):
+        self.table.get_item.return_value = {
+            "Item": {
+                "requestId": "req-123",
+                "status": "active",
+                "policyName": "jit-grant-req-123",
+            }
+        }
+
+        self.iam.delete_role_policy.side_effect = (
+            self.iam.exceptions.NoSuchEntityException()
+        )
+
+        result = app._revoke(
+            "req-123",
+            reason="scheduled_expiry",
+            actor=None,
+        )
+
+        self.assertEqual(result["status"], "expired")
+        self.table.update_item.assert_called_once()

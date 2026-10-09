@@ -1,3 +1,4 @@
+import base64
 import json
 import importlib.util
 import os
@@ -172,6 +173,86 @@ class ListRequestsTests(unittest.TestCase):
             body["message"],
             "Could not list requests"
         )
+
+    def test_valid_cursor_is_passed_to_query(self):
+        import base64
+
+        last_key = {
+            "requestId": "req-100",
+            "requesterId": "user-123",
+        }
+        cursor = base64.urlsafe_b64encode(
+            json.dumps(last_key).encode()
+        ).decode()
+
+        self.table.query.return_value = {"Items": []}
+
+        response = app.handler(
+            self.make_event(query={"cursor": cursor}), None
+        )
+
+        self.assertEqual(response["statusCode"], 200)
+        query_kwargs = self.table.query.call_args.kwargs
+        self.assertEqual(query_kwargs["ExclusiveStartKey"], last_key)
+
+    def test_invalid_cursor_does_not_crash(self):
+        self.table.query.return_value = {"Items": []}
+
+        response = app.handler(
+            self.make_event(query={"cursor": "not-valid-base64!!!"}), None
+        )
+
+        self.assertEqual(response["statusCode"], 200)
+        query_kwargs = self.table.query.call_args.kwargs
+        self.assertNotIn("ExclusiveStartKey", query_kwargs)
+
+    def test_empty_results_returns_empty_list(self):
+        self.table.query.return_value = {"Items": []}
+
+        response = app.handler(self.make_event(), None)
+
+        self.assertEqual(response["statusCode"], 200)
+        body = json.loads(response["body"])
+        self.assertEqual(body["requests"], [])
+        self.assertIsNone(body["nextCursor"])
+
+    def test_zero_or_negative_limit_uses_default(self):
+        for limit in ("0", "-5"):
+            with self.subTest(limit=limit):
+                self.table.query.reset_mock()
+                self.table.query.return_value = {"Items": []}
+
+                response = app.handler(
+                    self.make_event(query={"limit": limit}), None
+                )
+
+                self.assertEqual(response["statusCode"], 200)
+                self.assertEqual(
+                    self.table.query.call_args.kwargs["Limit"], 20
+                )
+
+    def test_next_cursor_is_returned(self):
+        last_key = {
+            "requestId": "req-200",
+            "requesterId": "user-123",
+        }
+        self.table.query.return_value = {
+            "Items": [],
+            "LastEvaluatedKey": last_key,
+        }
+
+        response = app.handler(self.make_event(), None)
+
+        self.assertEqual(response["statusCode"], 200)
+        body = json.loads(response["body"])
+        self.assertIsNotNone(body["nextCursor"])
+
+        decoded = json.loads(
+            base64.urlsafe_b64decode(
+                body["nextCursor"].encode()
+            )
+        )
+        self.assertEqual(decoded, last_key)
 
 
 if __name__ == "__main__":

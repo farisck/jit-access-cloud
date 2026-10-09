@@ -22,3 +22,5 @@ body.json
 key.json
 env.json
 bad-event.json
+
+.coverage
