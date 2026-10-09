@@ -1,6 +1,6 @@
-![JIT Access CI](https://github.com/farisck/jit-access-cloud/actions/workflows/hello.yml/badge.svg)
+[![JIT Access CI](https://github.com/farisck/jit-access-cloud/actions/workflows/hello.yml/badge.svg)](https://github.com/farisck/jit-access-cloud/actions/workflows/hello.yml)
 
-![Test Coverage](https://img.shields.io/badge/coverage-96%25-brightgreen)
+[![codecov](https://codecov.io/github/farisck/jit-access-cloud/graph/badge.svg)](https://codecov.io/github/farisck/jit-access-cloud)
 
 # JIT Access Manager
 
