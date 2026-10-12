@@ -1,0 +1,36 @@
+name: Deploy Frontend
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'frontend/**'
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::921049725652:role/jit-access-dev-github-deploy-role
+          aws-region: us-east-1
+
+      - name: Upload index.html
+        run: aws s3 cp frontend/index.html s3://jit-access-dev-frontend-921049725652/index.html --content-type text/html --cache-control no-cache
+
+      - name: Upload favicon.ico
+        run: aws s3 cp frontend/favicon.ico s3://jit-access-dev-frontend-921049725652/favicon.ico --content-type image/vnd.microsoft.icon --cache-control "max-age=86400"
+
+      - name: Upload favicon.svg
+        run: aws s3 cp frontend/favicon.svg s3://jit-access-dev-frontend-921049725652/favicon.svg --content-type image/svg+xml --cache-control "max-age=86400"
+
+      - name: Invalidate CloudFront cache
+        run: aws cloudfront create-invalidation --distribution-id EWMBBAFBT5WS4 --paths "/index.html" "/favicon.ico" "/favicon.svg"
