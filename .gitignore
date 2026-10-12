@@ -24,3 +24,6 @@ env.json
 bad-event.json
 
 .coverage
+
+trust-policy.json
+deploy-permissions.json
