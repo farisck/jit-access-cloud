@@ -251,13 +251,14 @@ up to an hour to show up on some networks.
 
 Backend logic is covered by Python unit tests in `tests/`, run automatically
 by GitHub Actions on every push. Coverage is reported to Codecov (badge at
-the top). At the last check, 42 unit tests passed with about 95.8% coverage
-against a 90% threshold.
+the top). At the last check, 42 unit tests passed with 96% coverage
+against a 90% threshold (per file: request_access 100%, revoke_access 96%,
+list_requests 95%, approve_access 94%).
 
 Run the tests locally from the repo root:
 
 ```bash
-pytest tests/
+python -m coverage run --include="lambda/*/app.py" -m unittest discover -s tests -v
 ```
 
 Manual end-to-end checks on the live site (employee and manager accounts):
