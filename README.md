@@ -1,3 +1,7 @@
+[![JIT Access CI](https://github.com/farisck/jit-access-cloud/actions/workflows/hello.yml/badge.svg)](https://github.com/farisck/jit-access-cloud/actions/workflows/hello.yml)
+
+[![codecov](https://codecov.io/github/farisck/jit-access-cloud/graph/badge.svg)](https://codecov.io/github/farisck/jit-access-cloud)
+
 # JIT Access Manager
 
 A just-in-time privileged access platform on AWS — Cloud Computing capstone project.
@@ -136,31 +140,62 @@ CLIENT_ID=$(aws cloudformation describe-stacks --stack-name jit-access-dev-found
 
 # Requester
 aws cognito-idp admin-create-user --user-pool-id $POOL_ID --username employee@example.com \
-  --temporary-password 'TempPass123!' --message-action SUPPRESS --region us-east-1
+  --temporary-password '<temporary-password>' --message-action SUPPRESS --region us-east-1
 aws cognito-idp admin-set-user-password --user-pool-id $POOL_ID --username employee@example.com \
-  --password 'RealPass123!' --permanent --region us-east-1
+  --password '<your-password>' --permanent --region us-east-1
 
 # Approver — same steps, then add to the approvers group
 aws cognito-idp admin-create-user --user-pool-id $POOL_ID --username manager@example.com \
-  --temporary-password 'TempPass123!' --message-action SUPPRESS --region us-east-1
+  --temporary-password '<temporary-password>' --message-action SUPPRESS --region us-east-1
 aws cognito-idp admin-set-user-password --user-pool-id $POOL_ID --username manager@example.com \
-  --password 'RealPass123!' --permanent --region us-east-1
+  --password '<your-password>' --permanent --region us-east-1
 aws cognito-idp admin-add-user-to-group --user-pool-id $POOL_ID --username manager@example.com \
   --group-name approvers --region us-east-1
 ```
 
 ## Frontend
 
-A standalone dashboard at `frontend/index.html` — no build step, no npm
-install required for the app itself. Run it locally with:
+The JIT Access Manager frontend is a standalone dashboard located at
+`frontend/index.html`. It requires no build step or npm installation.
+
+### Live Demo
+
+The frontend is publicly available through Amazon CloudFront with a custom
+HTTPS domain:
+
+**https://jit.barfs.shop**
+
+The frontend is hosted in a private Amazon S3 bucket and delivered through
+Amazon CloudFront. AWS Certificate Manager (ACM) provides the SSL/TLS
+certificate for the custom domain.
+
+CloudFront distribution:
+
+- Distribution ID: `EWMBBAFBT5WS4`
+- CloudFront domain: `dhdhrgszajmez.cloudfront.net`
+- Default root object: `index.html`
+
+The custom domain is configured through GoDaddy DNS using a CNAME record:
+
+```text
+jit.barfs.shop → dhdhrgszajmez.cloudfront.net
+```
+
+The public deployment was tested successfully with both employee and manager
+login workflows.
+
+### Local Testing
+
+The frontend can also be tested locally with:
 
 ```bash
 npx serve frontend
 ```
 
-Then open `http://localhost:3000`. Keep the terminal running while testing.
+Then open `http://localhost:3000`.
 
 The dashboard shows different sections depending on who's logged in:
+
 - **Employee login** — "Request Temporary Access" form and "My Requests" history
 - **Manager login** (must be in the `approvers` Cognito group) — "Pending Access Requests" queue and "Active Access" list with a revoke action
 
@@ -196,6 +231,7 @@ The Lambda artifacts bucket isn't managed by any stack — delete it manually:
 
 Designed to run inside AWS Free Tier — everything here (Lambda, DynamoDB,
 API Gateway, EventBridge Scheduler, SNS, Cognito, CloudWatch) has a generous
-always-free or 12-month-free allowance. No CloudFront, no NAT Gateway, no
-customer-managed KMS key — the DynamoDB table uses its default AWS-owned
-encryption key, which carries no additional charge.
+always-free or 12-month-free allowance. CloudFront is used for the public
+frontend deployment. No NAT Gateway or customer-managed KMS key is used —
+the DynamoDB table uses its default AWS-owned encryption key, which carries
+no additional charge.
