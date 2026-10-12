@@ -1,1330 +1,466 @@
 <!DOCTYPE html>
-
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>JIT Access Manager</title>
-
-  <style>
-    * {
-      box-sizing: border-box;
-    }
-
-    body {
-      margin: 0;
-      font-family: Arial, Helvetica, sans-serif;
-      background: #f4f6f8;
-      color: #17202a;
-    }
-
-    .header {
-      background: #111827;
-      color: white;
-      padding: 20px 30px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 20px;
-    }
-
-    .header h1 {
-      margin: 0;
-      font-size: 22px;
-    }
-
-    .header p {
-      margin: 5px 0 0;
-      color: #cbd5e1;
-      font-size: 13px;
-    }
-
-    .user-info {
-      text-align: right;
-      font-size: 13px;
-    }
-
-    .container {
-      max-width: 1100px;
-      margin: 30px auto;
-      padding: 0 20px;
-    }
-
-    .card {
-      background: white;
-      border-radius: 12px;
-      padding: 24px;
-      margin-bottom: 20px;
-      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.06);
-    }
-
-    .login-card {
-      max-width: 430px;
-      margin: 80px auto;
-    }
-
-    h2 {
-      margin-top: 0;
-      font-size: 20px;
-    }
-
-    h3 {
-      margin-top: 0;
-    }
-
-    label {
-      display: block;
-      margin: 14px 0 6px;
-      font-weight: bold;
-      font-size: 14px;
-    }
-
-    input,
-    select,
-    textarea {
-      width: 100%;
-      padding: 11px;
-      border: 1px solid #cbd5e1;
-      border-radius: 7px;
-      font-size: 14px;
-    }
-
-    textarea {
-      min-height: 90px;
-      resize: vertical;
-    }
-
-    button {
-      border: 0;
-      border-radius: 7px;
-      padding: 10px 15px;
-      cursor: pointer;
-      font-weight: bold;
-      font-size: 14px;
-      margin-top: 12px;
-    }
-
-    .primary {
-      background: #111827;
-      color: white;
-    }
-
-    .success {
-      background: #15803d;
-      color: white;
-    }
-
-    .danger {
-      background: #b91c1c;
-      color: white;
-    }
-
-    .secondary {
-      background: #475569;
-      color: white;
-    }
-
-    button:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
-
-    .hidden {
-      display: none !important;
-    }
-
-    .message {
-      padding: 12px;
-      border-radius: 7px;
-      margin: 15px 0;
-      font-size: 14px;
-      display: none;
-    }
-
-    .message.success-message {
-      display: block;
-      background: #dcfce7;
-      color: #166534;
-    }
-
-    .message.error-message {
-      display: block;
-      background: #fee2e2;
-      color: #991b1b;
-    }
-
-    .message.info-message {
-      display: block;
-      background: #e0f2fe;
-      color: #075985;
-    }
-
-    .request-card {
-      border: 1px solid #e2e8f0;
-      border-radius: 9px;
-      padding: 16px;
-      margin: 12px 0;
-    }
-
-    .request-card strong {
-      color: #111827;
-    }
-
-    .request-meta {
-      color: #64748b;
-      font-size: 13px;
-      margin-top: 6px;
-    }
-
-    .actions {
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-      margin-top: 10px;
-    }
-
-    .status {
-      display: inline-block;
-      padding: 4px 9px;
-      border-radius: 20px;
-      font-size: 12px;
-      font-weight: bold;
-      margin-left: 6px;
-    }
-
-    .status.pending {
-      background: #fef3c7;
-      color: #92400e;
-    }
-
-    .status.active {
-      background: #dcfce7;
-      color: #166534;
-    }
-
-    .status.denied,
-    .status.revoked_early,
-    .status.expired {
-      background: #e2e8f0;
-      color: #334155;
-    }
-
-    .status.revoke_failed {
-      background: #fee2e2;
-      color: #991b1b;
-    }
-
-    .section-title {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 10px;
-    }
-
-    .small {
-      color: #64748b;
-      font-size: 13px;
-    }
-
-    .logout {
-      background: #374151;
-      color: white;
-      margin-top: 0;
-    }
-
-    .loading {
-      color: #64748b;
-      font-size: 14px;
-    }
-
-    @media (max-width: 700px) {
-      .header {
-        flex-direction: column;
-        align-items: flex-start;
-      }
-
-      .user-info {
-        text-align: left;
-      }
-
-      .container {
-        margin-top: 20px;
-      }
-    }
-  </style>
-
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JIT Access Manager</title>
+<style>
+:root{color-scheme:dark;--navy:#07111f;--navy2:#0c1b2d;--paper:#0a1422;--line:#20354b;--ink:#e8f2fb;--muted:#91a8bd;--brand:#22d3ee;--brand-d:#06b6d4;--ok:#34d399;--bad:#fb7185;--warn:#fbbf24;--panel:#101f31;--panel2:#14263a}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.55 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background-image:radial-gradient(ellipse at 15% 0%,rgba(8,145,178,.11),transparent 42%)}
+.hidden{display:none!important}button,input,select,textarea{font:inherit;color:inherit}:focus-visible{outline:3px solid var(--brand);outline-offset:3px}
+h2{margin:0;font-size:clamp(22px,2.4vw,29px);letter-spacing:-.035em}h3{margin:0 0 12px;font-size:16px}.mut{color:var(--muted);font-size:13px}
+.btn{border:1px solid transparent;border-radius:9px;padding:10px 15px;font-weight:650;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:8px;transition:background .16s,border-color .16s,transform .16s}.btn:hover:not(:disabled){transform:translateY(-1px)}.btn.primary{background:var(--brand);color:#04202b}.btn.primary:hover{background:#67e8f9}.btn.ok{background:#0e9f78;color:#fff}.btn.bad{background:transparent;color:#fda4af;border-color:#75404d}.btn.bad:hover{background:#3a1e2a}.btn.solid-bad{background:#be123c;color:#fff}.btn.line{background:#14263a;border-color:#2a4057;color:#dceaf6}.btn.line:hover{background:#1a3047}.btn.sm{padding:7px 11px;font-size:13px}.btn.block{width:100%}.btn:disabled{opacity:.55;cursor:not-allowed}.spin{width:14px;height:14px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:r .7s linear infinite}@keyframes r{to{transform:rotate(360deg)}}
+#loginPage{min-height:100vh;display:grid;place-items:center;background:radial-gradient(700px 450px at 20% 0,rgba(8,145,178,.2),transparent 70%),linear-gradient(145deg,#07111f,#0b1d30 60%,#07111f);padding:24px}.lbox{width:100%;max-width:440px}.lbrand{display:flex;align-items:center;gap:13px;color:#fff;margin:0 auto 22px;max-width:400px}.lbrand b{font-size:21px;display:block;letter-spacing:-.025em}.lbrand span{color:#91a8bd;font-size:13px}.lcard{background:rgba(16,31,49,.94);border:1px solid #294158;border-radius:18px;padding:30px;box-shadow:0 24px 80px rgba(0,0,0,.28);backdrop-filter:blur(12px)}.lcard h2{margin-bottom:5px}.lcard input{margin-bottom:2px}
+.app{display:grid;grid-template-columns:252px minmax(0,1fr);min-height:100vh}.side{background:rgba(7,17,31,.94);border-right:1px solid #1c3045;color:#c7d8e8;display:flex;flex-direction:column;padding:22px 15px;position:sticky;top:0;height:100vh}.sbrand{display:flex;align-items:center;gap:10px;padding:0 8px 25px;color:#fff}.sbrand b{display:block;font-size:17px;line-height:1.2;letter-spacing:-.02em}.sbrand span{font-size:11.5px;color:#8fa9be}#nav{display:flex;flex-direction:column;gap:5px}#nav button{display:flex;align-items:center;justify-content:space-between;width:100%;text-align:left;padding:11px 12px;border-radius:9px;background:none;border:1px solid transparent;color:#9eb4c9;cursor:pointer;font-weight:600}#nav button:hover{background:#102338;color:#f1f8ff}#nav button[aria-current=page]{background:linear-gradient(90deg,rgba(34,211,238,.16),rgba(34,211,238,.04));border-color:#1d5365;color:#e8fbff;box-shadow:inset 3px 0 0 var(--brand)}.pill{background:var(--brand);color:#06202a;border-radius:999px;font-size:12px;padding:0 8px;font-weight:800}.pill:empty{display:none}.suser{margin-top:auto;border-top:1px solid #20354b;padding:16px 8px 0}.urow{display:flex;gap:10px;align-items:center;margin-bottom:12px}.avatar{width:38px;height:38px;flex:none;border-radius:12px;background:linear-gradient(145deg,#155e75,#164e63);border:1px solid #26738a;color:#cffafe;display:grid;place-items:center;font-weight:800}.uname{font-size:13px;color:#f3f8fd;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:150px}.urole{font-size:12px;color:#8fa9be}.suser .btn{background:transparent;color:#cfe0ee;border-color:#2b435b;width:100%}.suser .btn:hover{background:#102a42}.main{padding:32px clamp(18px,3.4vw,46px) 60px;min-width:0;width:100%;max-width:1500px}.top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:24px;flex-wrap:wrap;padding-bottom:20px;border-bottom:1px solid #1b3045}.top p{margin:5px 0 0;color:var(--muted)}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:14px;margin-bottom:24px}.stat{position:relative;overflow:hidden;background:linear-gradient(145deg,#13263a,#0f1e2f);border:1px solid #263d54;border-radius:13px;padding:17px 18px;min-height:95px}.stat:after{content:"";position:absolute;right:-24px;top:-30px;width:85px;height:85px;border-radius:50%;background:var(--c,#22d3ee);opacity:.07}.stat span{display:block;font-size:13px;color:#9eb3c6;margin-bottom:7px}.stat b{font-size:29px;line-height:1.15;letter-spacing:-.03em;color:#f3f9ff}.stat.pending{--c:#fbbf24}.stat.active{--c:#34d399}.stat.ended{--c:#94a3b8}.stat.total{--c:#22d3ee}
+.panel{background:var(--panel);border:1px solid #263d54;border-radius:14px;padding:22px}.form{max-width:650px;box-shadow:0 12px 36px rgba(0,0,0,.12)}label,.lbl{display:block;margin:17px 0 7px;font-weight:650;font-size:13px;color:#d9e7f3}input[type=email],input[type=password],select,textarea{width:100%;padding:11px 13px;border:1px solid #30485f;border-radius:9px;background:#0b1929;color:#eef7ff;transition:border-color .15s,box-shadow .15s}input::placeholder,textarea::placeholder{color:#6f879d}input[type=email]:focus,input[type=password]:focus,select:focus,textarea:focus{outline:none;border-color:#22d3ee;box-shadow:0 0 0 3px rgba(34,211,238,.1)}select option{background:#0b1929}textarea{min-height:108px;resize:vertical}.hint{font-size:12px;color:#8fa8bd;margin-top:6px;display:flex;justify-content:space-between;gap:10px}.seg{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.seg input{position:absolute;opacity:0;pointer-events:none}.seg label{margin:0;text-align:center;padding:10px 6px;border:1px solid #30485f;background:#0c1a2a;border-radius:9px;cursor:pointer;font-weight:650;font-size:13px;color:#a9bfd2;transition:.15s}.seg input:checked+label{background:rgba(34,211,238,.13);color:#a5f3fc;border-color:#0891b2;box-shadow:inset 0 0 0 1px rgba(34,211,238,.08)}.seg input:focus-visible+label{outline:3px solid #22d3ee;outline-offset:2px}.msg{display:none;padding:11px 14px;border-radius:9px;margin:14px 0 0;font-size:14px}.msg.success-message{display:block;background:#0d302b;color:#a7f3d0;border:1px solid #17664f}.msg.error-message{display:block;background:#391e2a;color:#fecdd3;border:1px solid #793449}.msg.info-message{display:block;background:#102d3e;color:#a5f3fc;border:1px solid #20576b}.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,310px),1fr));gap:16px}.item{background:linear-gradient(145deg,#13263a,#101f31);border:1px solid #263d54;border-radius:13px;padding:19px;display:flex;flex-direction:column;gap:12px;min-width:0;transition:border-color .15s,transform .15s}.item:hover{border-color:#38556e;transform:translateY(-1px)}.item .hd{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.perm{font-weight:750;color:#edf7ff;overflow-wrap:anywhere}.quote{border-left:3px solid #2a5269;padding:8px 0 8px 12px;color:#b8cad9;font-size:14px;overflow-wrap:anywhere;background:linear-gradient(90deg,rgba(34,211,238,.04),transparent)}.acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:auto;padding-top:5px}.sec-t{margin:26px 0 12px}
+.badge{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;font-size:12px;font-weight:750;white-space:nowrap;border:1px solid transparent}.badge::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}.badge.pending{background:#3a2c14;color:#fcd34d;border-color:#654a1b}.badge.active{background:#10372f;color:#6ee7b7;border-color:#1b614e}.badge.denied{background:#3d2029;color:#fda4af;border-color:#713342}.badge.expired{background:#243140;color:#c0cfdb;border-color:#394b5e}.badge.revoked_early{background:#2d2544;color:#c4b5fd;border-color:#504074}.badge.revoke_failed{background:#881337;color:#fff;border-color:#be123c}
+.cd .t{font-weight:750;font-variant-numeric:tabular-nums;color:#6ee7b7}.cd .t.low{color:#fbbf24}.cd .bar2{height:5px;border-radius:4px;background:#25394b;margin:7px 0 4px;overflow:hidden}.cd .bar2 i{display:block;height:100%;background:var(--ok);width:100%;transition:width 1s linear;border-radius:4px}.cd .t.low~.bar2 i{background:var(--warn)}
+.tabs{display:flex;gap:7px;overflow-x:auto;padding-bottom:5px;margin-bottom:14px}.tab{flex:none;border:1px solid #2a4056;background:#0d1b2b;border-radius:999px;padding:7px 13px;font-size:13px;font-weight:650;cursor:pointer;color:#9eb4c9}.tab b{margin-left:5px;color:#e8f2fb}.tab[aria-pressed=true]{background:#123b4a;border-color:#087e95;color:#a5f3fc}.tab[aria-pressed=true] b{color:#cffafe}.tbl{overflow-x:auto;border:1px solid #263d54;border-radius:11px}table{width:100%;border-collapse:collapse}th{text-align:left;font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#91a8bd;font-weight:700;padding:12px 13px;border-bottom:1px solid #2a4056;white-space:nowrap;background:#122337}td{padding:13px; border-bottom:1px solid #1e3348;vertical-align:top;font-size:13.5px;color:#d4e2ee}tr:last-child td{border-bottom:0}tbody tr:hover{background:rgba(34,211,238,.025)}.reason{color:#91a8bd;font-size:12px;margin-top:4px;max-width:320px;overflow-wrap:anywhere}
+.empty{padding:42px 14px;text-align:center;color:#91a8bd;background:rgba(16,31,49,.55);border:1px dashed #2a4056;border-radius:12px}.empty b{display:block;color:#e2edf7;margin-bottom:5px;font-size:15px}.skel{height:48px;border-radius:9px;margin:8px 0;background:linear-gradient(90deg,#13263a 25%,#1a3045 50%,#13263a 75%);background-size:200% 100%;animation:sh 1.2s infinite}@keyframes sh{to{background-position:-200% 0}}.err{padding:14px;border-radius:9px;background:#391e2a;color:#fecdd3;border:1px solid #793449;font-size:14px}
+.tl{list-style:none;margin:16px 0 0;padding:0}.tl li{position:relative;padding:0 0 18px 28px}.tl li::before{content:"";position:absolute;left:0;top:4px;width:13px;height:13px;border-radius:50%;background:#34d399;box-shadow:0 0 0 3px #13263a}.tl li::after{content:"";position:absolute;left:6px;top:18px;bottom:-2px;width:2px;background:#2a4056}.tl li:last-child::after{display:none}.tl li.now::before{background:#22d3ee}.tl li.next::before{background:#101f31;border:2px solid #7e93a7}.tl li.bad::before{background:#fb7185}.tl b{display:block;color:#e6f2fc}.tl span{color:#91a8bd;font-size:13px}
+#toasts{position:fixed;right:18px;bottom:18px;display:flex;flex-direction:column;gap:8px;z-index:50;max-width:calc(100vw - 36px)}.toast{background:#13263a;color:#f0f9ff;padding:13px 16px;border-radius:10px;font-size:14px;box-shadow:0 12px 32px rgba(0,0,0,.35);border:1px solid #2a4056;border-left:4px solid #34d399}.toast.error{border-left-color:#fb7185}dialog{border:1px solid #30485f;border-radius:15px;padding:25px;max-width:440px;width:calc(100vw - 32px);background:#101f31;color:#e8f2fb;box-shadow:0 20px 50px rgba(0,0,0,.5)}dialog::backdrop{background:rgba(2,8,16,.75);backdrop-filter:blur(3px)}dialog h3{margin:0 0 6px;font-size:19px}dialog p{margin:0 0 20px;color:#a2b7ca}dialog .acts{justify-content:flex-end}
+@media(max-width:860px){.app{grid-template-columns:1fr}.side{position:static;height:auto;padding:14px;border-right:0;border-bottom:1px solid #20354b}.sbrand{padding-bottom:12px}#nav{flex-direction:row;overflow-x:auto}#nav button{white-space:nowrap;gap:8px;width:auto;flex:none}.suser{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:12px;padding-top:12px}.urow{margin:0}.suser .btn{width:auto}.main{padding:22px 17px 44px}}
+@media(max-width:720px){table,tbody,tr,td{display:block}thead{display:none}tr{border:1px solid #263d54;border-radius:10px;padding:7px 12px;margin-bottom:12px;background:#101f31}td{display:flex;justify-content:space-between;gap:16px;padding:9px 0;border-bottom:1px solid #1e3348;text-align:right}td:empty{display:none}td::before{content:attr(data-label);color:#91a8bd;font-size:12px;text-align:left;flex:none}td:first-child{display:block;text-align:left}td:first-child::before{display:none}.reason{max-width:none}.panel{padding:15px}.lcard{padding:24px}.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.stat{padding:14px}.stat b{font-size:25px}}
+@media(max-width:390px){.seg{grid-template-columns:repeat(2,1fr)}.top{align-items:center}.top .btn{max-width:100%}.item .hd{flex-direction:column;align-items:flex-start}}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+</style>
 </head>
-
 <body>
 
-  <!-- HEADER -->
-
-  <div class="header">
-    <div>
-      <h1>JIT Access Manager</h1>
-      <p>Just-in-time privileged access platform</p>
+<!-- LOGIN -->
+<div id="loginPage">
+  <div class="lbox">
+    <div class="lbrand">
+      <svg width="38" height="38" viewBox="0 0 34 34" fill="none" aria-hidden="true"><circle cx="17" cy="17" r="14" stroke="#1d4a6b" stroke-width="4"/><path d="M17 3a14 14 0 0 1 14 14" stroke="#22d3ee" stroke-width="4" stroke-linecap="round"/><circle cx="17" cy="17" r="3.5" fill="#22d3ee"/></svg>
+      <div><b>JIT Access Manager</b><span>Just-in-time privileged access platform</span></div>
     </div>
-
-```
-<div id="userInfo" class="user-info hidden">
-  <div id="loggedInUser"></div>
-  <div id="userRole"></div>
-  <button class="logout" onclick="logout()">Logout</button>
-</div>
-```
-
-  </div>
-
-  <!-- LOGIN -->
-
-  <div id="loginPage" class="container">
-    <div class="card login-card">
+    <div class="lcard">
       <h2>Sign in</h2>
-      <p class="small">
-        Use your JIT Access Manager Cognito account.
-      </p>
-
-```
-  <div id="loginMessage" class="message"></div>
-
-  <label for="username">Email</label>
-  <input
-    id="username"
-    type="email"
-    placeholder="employee@example.com"
-    autocomplete="username"
-  >
-
-  <label for="password">Password</label>
-  <input
-    id="password"
-    type="password"
-    placeholder="Password"
-    autocomplete="current-password"
-  >
-
-  <button class="primary" style="width:100%;" onclick="login()">
-    Sign In
-  </button>
-</div>
-```
-
+      <p class="mut" style="margin:0">Use your JIT Access Manager Cognito account.</p>
+      <div id="loginMessage" class="msg" role="status" aria-live="polite"></div>
+      <label for="username">Email</label>
+      <input id="username" type="email" placeholder="employee@example.com" autocomplete="username">
+      <label for="password">Password</label>
+      <input id="password" type="password" placeholder="Password" autocomplete="current-password">
+      <button class="btn primary block" id="loginBtn" type="button" style="margin-top:20px">Sign in</button>
+    </div>
   </div>
-
-  <!-- EMPLOYEE DASHBOARD -->
-
-  <div id="employeePage" class="container hidden">
-
-```
-<div class="card">
-  <h2>Request Temporary Access</h2>
-
-  <div id="requestMessage" class="message"></div>
-
-  <label for="permission">Permission</label>
-  <select id="permission">
-    <option value="s3-read-demo-bucket">
-      S3 Read - Demo Bucket
-    </option>
-    <option value="dynamodb-read-requests">
-      DynamoDB Read - Requests Table
-    </option>
-  </select>
-
-  <label for="reason">Reason</label>
-  <textarea
-    id="reason"
-    maxlength="500"
-    placeholder="Explain why you need this temporary access..."
-  ></textarea>
-
-  <label for="duration">Duration</label>
-  <select id="duration">
-    <option value="15">15 minutes</option>
-    <option value="30">30 minutes</option>
-    <option value="60" selected>60 minutes</option>
-    <option value="120">2 hours</option>
-    <option value="240">4 hours</option>
-    <option value="480">8 hours</option>
-  </select>
-
-  <button class="primary" onclick="createRequest()">
-    Request Access
-  </button>
 </div>
 
+<!-- APP -->
+<div id="app" class="app hidden">
+  <aside class="side">
+    <div class="sbrand">
+      <svg width="30" height="30" viewBox="0 0 34 34" fill="none" aria-hidden="true"><circle cx="17" cy="17" r="14" stroke="#1d4a6b" stroke-width="4"/><path d="M17 3a14 14 0 0 1 14 14" stroke="#22d3ee" stroke-width="4" stroke-linecap="round"/><circle cx="17" cy="17" r="3.5" fill="#22d3ee"/></svg>
+      <div><b>JIT Access</b><span>Temporary privileged access</span></div>
+    </div>
+    <nav id="nav" aria-label="Main"></nav>
+    <div class="suser" id="userInfo">
+      <div class="urow"><div class="avatar" id="avatar"></div><div><div class="uname" id="loggedInUser"></div><div class="urole" id="userRole"></div></div></div>
+      <button class="btn sm" id="logoutBtn" type="button">Sign out</button>
+    </div>
+  </aside>
 
-<div class="card">
-  <div class="section-title">
-    <div>
-      <h2>My Requests</h2>
-      <div class="small">
-        Your access request history
-      </div>
+  <main class="main">
+    <div class="top">
+      <div><h2 id="pageTitle"></h2><p id="pageSub"></p></div>
+      <button class="btn line sm" id="refreshBtn" type="button">Refresh</button>
+    </div>
+    <div class="stats" id="stats"></div>
+
+    <!-- EMPLOYEE -->
+    <div id="employeePage" class="hidden">
+      <section data-view="mine"><div id="mineCards"></div></section>
+      <section data-view="request">
+        <div class="panel form">
+          <div id="requestMessage" class="msg" style="margin-top:0" role="status" aria-live="polite"></div>
+          <label for="permission" style="margin-top:0">Permission</label>
+          <select id="permission">
+            <option value="s3-read-demo-bucket">S3 read: demo bucket</option>
+            <option value="dynamodb-read-requests">DynamoDB read: requests table</option>
+          </select>
+          <label for="reason">Reason</label>
+          <textarea id="reason" maxlength="500" placeholder="Explain why you need this access, for example the ticket or task."></textarea>
+          <div class="hint"><span>Approvers see this text.</span><span id="reasonCount">0 / 500</span></div>
+          <div class="lbl">Duration</div>
+          <div class="seg" id="duration" role="radiogroup" aria-label="Duration">
+            <input type="radio" name="dur" id="d15" value="15"><label for="d15">15 min</label>
+            <input type="radio" name="dur" id="d30" value="30"><label for="d30">30 min</label>
+            <input type="radio" name="dur" id="d60" value="60" checked><label for="d60">1 hour</label>
+            <input type="radio" name="dur" id="d120" value="120"><label for="d120">2 hours</label>
+            <input type="radio" name="dur" id="d240" value="240"><label for="d240">4 hours</label>
+            <input type="radio" name="dur" id="d480" value="480"><label for="d480">8 hours</label>
+          </div>
+          <button class="btn primary block" id="requestBtn" type="button" style="margin-top:22px">Request access</button>
+        </div>
+      </section>
+      <section data-view="history"><div class="panel"><div class="tabs" id="tabs"></div><div id="myRequests"></div></div></section>
     </div>
 
-    <button class="secondary" onclick="loadMyRequests()">
-      Refresh
-    </button>
-  </div>
-
-  <div id="myRequests">
-    <p class="loading">Loading requests...</p>
-  </div>
-</div>
-```
-
-  </div>
-
-  <!-- MANAGER DASHBOARD -->
-
-  <div id="managerPage" class="container hidden">
-
-```
-<div class="card">
-  <div class="section-title">
-    <div>
-      <h2>Pending Access Requests</h2>
-      <div class="small">
-        Requests awaiting manager approval
-      </div>
+    <!-- MANAGER -->
+    <div id="managerPage" class="hidden">
+      <section data-view="pending"><div id="pendingRequests"></div></section>
+      <section data-view="active"><div id="activeRequests"></div></section>
+      <section data-view="history"><div class="panel" id="endedRequests"></div></section>
     </div>
-
-    <button class="secondary" onclick="loadPendingRequests()">
-      Refresh
-    </button>
-  </div>
-
-  <div id="managerMessage" class="message"></div>
-
-  <div id="pendingRequests">
-    <p class="loading">Loading pending requests...</p>
-  </div>
+  </main>
 </div>
 
-
-<div class="card">
-  <div class="section-title">
-    <div>
-      <h2>Active Access</h2>
-      <div class="small">
-        Currently active temporary grants
-      </div>
-    </div>
-
-    <button class="secondary" onclick="loadActiveRequests()">
-      Refresh
-    </button>
-  </div>
-
-  <div id="activeRequests">
-    <p class="loading">Loading active requests...</p>
-  </div>
-</div>
-```
-
-  </div>
+<div id="toasts" aria-live="polite"></div>
+<dialog id="dlg"><h3 id="dlgTitle"></h3><p id="dlgText"></p><div class="acts"><button class="btn line" id="dlgNo" type="button">Cancel</button><button class="btn" id="dlgYes" type="button"></button></div></dialog>
+<dialog id="detail"><div id="detailBody"></div><div class="acts" style="margin-top:8px"><button class="btn line" id="detailClose" type="button">Close</button></div></dialog>
 
 <script>
-  // ============================================================
-  // CONFIGURATION
-  // ============================================================
+// ============================================================
+// CONFIGURATION (unchanged)
+// ============================================================
+const API_BASE = "https://nae7gvq1k2.execute-api.us-east-1.amazonaws.com";
+const COGNITO_REGION = "us-east-1";
+const USER_POOL_ID = "us-east-1_cwMDpfcRw";
+const CLIENT_ID = "7sjnp6kopq95l824inp74pdl8a";
 
-  const API_BASE =
-    "https://nae7gvq1k2.execute-api.us-east-1.amazonaws.com";
+// ============================================================
+// STATE
+// ============================================================
+let idToken=null, accessToken=null, currentUser=null, isManager=false;
+let myList=[], myFilter="all", mgr={pending:[],active:[],ended:[]}, cache={}, view="";
 
-  const COGNITO_REGION = "us-east-1";
+const $=id=>document.getElementById(id);
+const STATUS={pending:"Pending",active:"Active",denied:"Denied",expired:"Expired",revoked_early:"Revoked",revoke_failed:"Revoke failed"};
+const PERMS={"s3-read-demo-bucket":"S3 read: demo bucket","dynamodb-read-requests":"DynamoDB read: requests table"};
+const TABS=[["all","All"],["pending","Pending"],["active","Active"],["denied","Denied"],["expired","Expired"],["revoked_early","Revoked"]];
+const NAV_E=[["mine","My access","Active grants and requests waiting for approval"],["request","Request access","Ask for temporary, scoped permissions"],["history","History","Every request you have made"]];
+const NAV_M=[["pending","Approvals","Requests waiting for your decision"],["active","Active grants","Temporary access that is live right now"],["history","Access history","Expired, denied and revoked access"]];
+const ENDED=["expired","denied","revoked_early"];
 
-  const USER_POOL_ID =
-    "us-east-1_cwMDpfcRw";
+// ============================================================
+// HELPERS
+// ============================================================
+function escapeHtml(v){return String(v??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#039;")}
+const esc=escapeHtml;
+function showMessage(id,m,t="info"){const e=$(id);e.textContent=m;e.className="msg "+t+"-message"}
+function clearMessage(id){const e=$(id);e.textContent="";e.className="msg"}
+function toast(m,type="success"){const t=document.createElement("div");t.className="toast "+(type==="error"?"error":"");t.textContent=m;$("toasts").appendChild(t);setTimeout(()=>t.remove(),type==="error"?7000:4500)}
+function decodeJwt(token){
+  try{
+    const b=token.split(".")[1].replace(/-/g,"+").replace(/_/g,"/");
+    const p=b+"=".repeat((4-b.length%4)%4);
+    return JSON.parse(decodeURIComponent(atob(p).split("").map(c=>"%"+("00"+c.charCodeAt(0).toString(16)).slice(-2)).join("")));
+  }catch(e){console.error("Could not decode JWT:",e);return {}}
+}
+function formatDate(epoch){const n=Number(epoch);if(!epoch||!Number.isFinite(n))return "-";return new Date(n*1000).toLocaleString([],{dateStyle:"medium",timeStyle:"short"})}
+function formatDuration(m){m=Number(m);if(!m)return "-";if(m<60)return m+" min";const h=m/60;return (Number.isInteger(h)?h:h.toFixed(1))+(h===1?" hour":" hours")}
+const badge=s=>`<span class="badge ${esc(s)}">${esc(STATUS[s]||s)}</span>`;
+const permName=p=>esc(PERMS[p]||p);
+function setBusy(btn,busy,label){
+  if(!btn)return;
+  if(busy){btn.dataset.label=btn.innerHTML;btn.disabled=true;btn.innerHTML=`<span class="spin"></span>${label||"Working..."}`}
+  else{btn.disabled=false;if(btn.dataset.label!==undefined)btn.innerHTML=btn.dataset.label}
+}
+function confirmDialog(title,text,yes,danger){
+  return new Promise(resolve=>{
+    const d=$("dlg"),y=$("dlgYes"),n=$("dlgNo");
+    $("dlgTitle").textContent=title;$("dlgText").textContent=text;
+    y.textContent=yes;y.className="btn "+(danger?"solid-bad":"ok");
+    const done=v=>{d.close();y.onclick=n.onclick=null;d.oncancel=null;resolve(v)};
+    y.onclick=()=>done(true);n.onclick=()=>done(false);d.oncancel=()=>resolve(false);
+    d.showModal();
+  });
+}
+async function apiRequest(path,options={}){
+  if(!idToken)throw new Error("You are not signed in.");
+  const headers={"Authorization":"Bearer "+idToken,...(options.headers||{})};
+  if(options.body&&!headers["Content-Type"])headers["Content-Type"]="application/json";
+  let response;
+  try{response=await fetch(API_BASE+path,{...options,headers})}
+  catch{throw new Error("Could not reach the server. Check your connection and try again.")}
+  let data={};
+  try{data=await response.json()}catch{data={}}
+  if(response.status===401){logout("Your session expired. Please sign in again.");throw new Error("Session expired.")}
+  if(!response.ok)throw new Error(data.message||`API request failed with status ${response.status}`);
+  return data;
+}
+function groupsToManager(claims){
+  const g=claims["cognito:groups"]||[];
+  return Array.isArray(g)?g.includes("approvers"):String(g).replace(/[\[\]]/g,"").split(",").map(x=>x.trim()).includes("approvers");
+}
+const byNewest=(a,b)=>Number(b.requestedAt||0)-Number(a.requestedAt||0);
+const prep=l=>{const r=(l||[]).slice().sort(byNewest);r.forEach(x=>cache[x.requestId]=x);return r};
+const empty=(t,s,extra="")=>`<div class="empty"><b>${t}</b>${s}${extra}</div>`;
+const errBox=m=>`<div class="err">${esc(m)}</div>`;
+const skel='<div class="skel"></div><div class="skel"></div><div class="skel"></div>';
+const stat=(l,n,c)=>`<div class="stat ${c}"><span>${l}</span><b>${n}</b></div>`;
 
-  const CLIENT_ID =
-    "7sjnp6kopq95l824inp74pdl8a";
+function table(rows,cols){
+  return `<div class="tbl"><table><thead><tr>${cols.map(c=>`<th>${c[0]}</th>`).join("")}</tr></thead><tbody>${
+    rows.map(r=>`<tr>${cols.map(c=>`<td data-label="${c[0]}">${c[1](r)}</td>`).join("")}</tr>`).join("")
+  }</tbody></table></div>`;
+}
+const detailBtn=r=>`<button class="btn line sm" data-act="detail" data-id="${esc(r.requestId)}">Details</button>`;
 
+// live countdown
+function countdown(r){
+  const end=Number(r.expiresAt),dur=Number(r.durationMinutes)*60;
+  if(!end)return "-";
+  return `<div class="cd" data-end="${end}" data-dur="${dur}"><div class="t">--</div><div class="bar2"><i></i></div><div class="mut">Ends ${formatDate(end)}</div></div>`;
+}
+function tick(){
+  const now=Date.now()/1000;
+  document.querySelectorAll(".cd").forEach(el=>{
+    const end=+el.dataset.end,dur=+el.dataset.dur,left=end-now,t=el.querySelector(".t");
+    if(left<=0){t.textContent="Expiring...";el.querySelector("i").style.width="0%";return}
+    const h=Math.floor(left/3600),m=Math.floor(left%3600/60),s=Math.floor(left%60);
+    t.textContent=(h?h+"h ":"")+(h||m?String(m).padStart(h?2:1,"0")+"m ":"")+String(s).padStart(2,"0")+"s left";
+    t.classList.toggle("low",left<300);
+    el.querySelector("i").style.width=(dur?Math.max(0,Math.min(100,left/dur*100)):100)+"%";
+  });
+}
+setInterval(tick,1000);
 
-  // ============================================================
-  // APPLICATION STATE
-  // ============================================================
+// request card (approvals, active grants, my access)
+function card(r,m){
+  const s=r.status;
+  let acts=detailBtn(r);
+  if(s==="active")acts=`<button class="btn bad sm" data-act="revoke" data-id="${esc(r.requestId)}">Revoke access</button>`+acts;
+  if(s==="pending"&&m)acts=`<button class="btn ok sm" data-act="approve" data-id="${esc(r.requestId)}">Approve</button><button class="btn bad sm" data-act="deny" data-id="${esc(r.requestId)}">Deny</button>`+acts;
+  return `<article class="item">
+    <div class="hd"><div><div class="perm">${permName(r.permission)}</div>${m?`<div class="mut">${esc(r.requesterEmail||"Unknown")}</div>`:""}</div>${badge(s)}</div>
+    ${r.reason?`<div class="quote">${esc(r.reason)}</div>`:""}
+    ${s==="active"?countdown(r):`<div class="mut">${formatDuration(r.durationMinutes)} requested ${formatDate(r.requestedAt)}</div>`}
+    <div class="acts">${acts}</div></article>`;
+}
 
-  let idToken = null;
-  let accessToken = null;
-  let currentUser = null;
-  let isManager = false;
+// lifecycle timeline
+function showDetail(id){
+  const r=cache[id];if(!r)return;
+  const s=r.status,when=d=>formatDate(d)==="-"?"":formatDate(d);
+  const granted=["active","expired","revoked_early","revoke_failed"].includes(s);
+  const who=esc(r.decidedBy||"an approver");
+  const st=[["",`Requested`,when(r.requestedAt),"by "+esc(r.requesterEmail||currentUser?.username||"employee")]];
+  if(s==="pending")st.push(["now","Waiting for approval","","An approver must approve or deny this request."]);
+  else if(s==="denied")st.push(["bad","Denied",when(r.decidedAt),"by "+who]);
+  else st.push(["","Approved",when(r.decidedAt),"by "+who]);
+  if(granted)st.push([s==="active"?"now":"","Access granted","",formatDuration(r.durationMinutes)+" of temporary access"]);
+  if(s==="active")st.push(["next","Automatic revocation scheduled",when(r.expiresAt),"Access is removed at this time."]);
+  if(s==="expired")st.push(["","Expired and removed",when(r.expiresAt),"Access ended automatically."]);
+  if(s==="revoked_early")st.push(["","Revoked early",when(r.revokedAt),""]);
+  if(s==="revoke_failed")st.push(["bad","Revocation failed","","Check the CloudWatch alarms for this request."]);
+  $("detailBody").innerHTML=`<h3>${permName(r.permission)} ${badge(s)}</h3>
+    <div class="mut">${esc(r.requesterEmail||currentUser?.username||"")}</div>
+    ${r.reason?`<div class="quote" style="margin-top:12px">${esc(r.reason)}</div>`:""}
+    <ol class="tl">${st.map(x=>`<li class="${x[0]}"><b>${x[1]}</b><span>${[x[2],x[3]].filter(Boolean).join(" · ")}</span></li>`).join("")}</ol>
+    <div class="mut" style="margin-top:4px">Request ID: ${esc(r.requestId)}</div>`;
+  $("detail").showModal();
+}
 
-
-  // ============================================================
-  // HELPERS
-  // ============================================================
-
-  function showMessage(elementId, message, type = "info") {
-    const element = document.getElementById(elementId);
-
-    element.textContent = message;
-    element.className = "message " + type + "-message";
-  }
-
-
-  function clearMessage(elementId) {
-    const element = document.getElementById(elementId);
-
-    element.textContent = "";
-    element.className = "message";
-  }
-
-
-  function decodeJwt(token) {
-    try {
-      const payload = token.split(".")[1];
-
-      const base64 = payload
-        .replace(/-/g, "+")
-        .replace(/_/g, "/");
-
-      const padded =
-        base64 + "=".repeat((4 - base64.length % 4) % 4);
-
-      return JSON.parse(
-        decodeURIComponent(
-          atob(padded)
-            .split("")
-            .map(
-              c =>
-                "%" +
-                ("00" + c.charCodeAt(0).toString(16)).slice(-2)
-            )
-            .join("")
-        )
-      );
-    } catch (error) {
-      console.error("Could not decode JWT:", error);
-      return {};
-    }
-  }
-
-
-  function formatDate(epoch) {
-    if (!epoch) {
-      return "-";
-    }
-
-    const number = Number(epoch);
-
-    if (!Number.isFinite(number)) {
-      return "-";
-    }
-
-    return new Date(number * 1000).toLocaleString();
-  }
-
-
-  function statusBadge(status) {
-    return `
-      <span class="status ${status}">
-        ${status}
-      </span>
-    `;
-  }
-
-
-  async function apiRequest(path, options = {}) {
-    if (!idToken) {
-      throw new Error("You are not signed in.");
-    }
-
-    const headers = {
-      "Authorization": "Bearer " + idToken,
-      ...(options.headers || {})
-    };
-
-    if (options.body && !headers["Content-Type"]) {
-      headers["Content-Type"] = "application/json";
-    }
-
-    const response = await fetch(API_BASE + path, {
-      ...options,
-      headers
+// ============================================================
+// COGNITO LOGIN
+// ============================================================
+async function login(){
+  clearMessage("loginMessage");
+  const username=$("username").value.trim(),password=$("password").value;
+  if(!username||!password){showMessage("loginMessage","Enter your email and password.","error");return}
+  const btn=$("loginBtn");
+  try{
+    setBusy(btn,true,"Signing in...");
+    const response=await fetch(`https://cognito-idp.${COGNITO_REGION}.amazonaws.com/`,{
+      method:"POST",
+      headers:{"Content-Type":"application/x-amz-json-1.1","X-Amz-Target":"AWSCognitoIdentityProviderService.InitiateAuth"},
+      body:JSON.stringify({AuthFlow:"USER_PASSWORD_AUTH",ClientId:CLIENT_ID,AuthParameters:{USERNAME:username,PASSWORD:password}})
     });
-
-    let data = {};
-
-    try {
-      data = await response.json();
-    } catch {
-      data = {};
-    }
-
-    if (!response.ok) {
-      throw new Error(
-        data.message ||
-        `API request failed with status ${response.status}`
-      );
-    }
-
-    return data;
-  }
-
-
-  // ============================================================
-  // COGNITO LOGIN
-  // ============================================================
-
-  async function login() {
-    clearMessage("loginMessage");
-
-    const username =
-      document.getElementById("username").value.trim();
-
-    const password =
-      document.getElementById("password").value;
-
-    if (!username || !password) {
-      showMessage(
-        "loginMessage",
-        "Please enter your email and password.",
-        "error"
-      );
-
-      return;
-    }
-
-    try {
-      showMessage(
-        "loginMessage",
-        "Signing in...",
-        "info"
-      );
-
-      const endpoint =
-        `https://cognito-idp.${COGNITO_REGION}.amazonaws.com/`;
-
-      const response = await fetch(endpoint, {
-        method: "POST",
-
-        headers: {
-          "Content-Type": "application/x-amz-json-1.1",
-          "X-Amz-Target":
-            "AWSCognitoIdentityProviderService.InitiateAuth"
-        },
-
-        body: JSON.stringify({
-          AuthFlow: "USER_PASSWORD_AUTH",
-
-          ClientId: CLIENT_ID,
-
-          AuthParameters: {
-            USERNAME: username,
-            PASSWORD: password
-          }
-        })
-      });
-
-      const data = await response.json();
-
-      if (!response.ok || data.ChallengeName) {
-        throw new Error(
-          data.message ||
-          "Cognito authentication failed."
-        );
-      }
-
-      if (!data.AuthenticationResult) {
-        throw new Error(
-          "Cognito did not return an authentication result."
-        );
-      }
-
-      idToken =
-        data.AuthenticationResult.IdToken;
-
-      accessToken =
-        data.AuthenticationResult.AccessToken;
-
-      const claims = decodeJwt(idToken);
-
-      currentUser = {
-        username: claims.email || username,
-        sub: claims.sub
-      };
-
-      const groups = claims["cognito:groups"] || [];
-
-      if (Array.isArray(groups)) {
-        isManager = groups.includes("approvers");
-      } else {
-        isManager =
-          String(groups)
-            .replace(/[\[\]]/g, "")
-            .split(",")
-            .map(x => x.trim())
-            .includes("approvers");
-      }
-
-      // Store only the tokens needed for this browser session.
-      sessionStorage.setItem("jit_id_token", idToken);
-      sessionStorage.setItem("jit_access_token", accessToken);
-
-      showDashboard();
-
-    } catch (error) {
-      console.error(error);
-
-      showMessage(
-        "loginMessage",
-        error.message || "Login failed.",
-        "error"
-      );
-    }
-  }
-
-
-  // ============================================================
-  // DASHBOARD
-  // ============================================================
-
-  function showDashboard() {
-    document
-      .getElementById("loginPage")
-      .classList.add("hidden");
-
-    document
-      .getElementById("userInfo")
-      .classList.remove("hidden");
-
-    document
-      .getElementById("loggedInUser")
-      .textContent =
-        currentUser.username;
-
-    document
-      .getElementById("userRole")
-      .textContent =
-        isManager
-          ? "Role: Approver / Manager"
-          : "Role: Employee";
-
-    if (!isManager) {
-      document
-        .getElementById("employeePage")
-        .classList.remove("hidden");
-
-      loadMyRequests();
-    }
-
-    if (isManager) {
-      document
-        .getElementById("managerPage")
-        .classList.remove("hidden");
-
-      loadPendingRequests();
-      loadActiveRequests();
-    }
-  }
-
-
-  // ============================================================
-  // EMPLOYEE - CREATE REQUEST
-  // ============================================================
-
-  async function createRequest() {
-    clearMessage("requestMessage");
-
-    const permission =
-      document.getElementById("permission").value;
-
-    const reason =
-      document.getElementById("reason").value.trim();
-
-    const durationMinutes =
-      Number(
-        document.getElementById("duration").value
-      );
-
-    if (!reason) {
-      showMessage(
-        "requestMessage",
-        "Please enter a reason for the access request.",
-        "error"
-      );
-
-      return;
-    }
-
-    try {
-      const data = await apiRequest(
-        "/requests",
-        {
-          method: "POST",
-
-          body: JSON.stringify({
-            permission,
-            reason,
-            durationMinutes
-          })
-        }
-      );
-
-      showMessage(
-        "requestMessage",
-        `Access request created successfully. Request ID: ${data.requestId}`,
-        "success"
-      );
-
-      document.getElementById("reason").value = "";
-
-      if (!isManager) {
-        await loadMyRequests();
-      }
-
-      if (isManager) {
-        await loadPendingRequests();
-      }
-
-    } catch (error) {
-      console.error(error);
-
-      showMessage(
-        "requestMessage",
-        error.message,
-        "error"
-      );
-    }
-  }
-
-
-  // ============================================================
-  // EMPLOYEE - LIST OWN REQUESTS
-  // ============================================================
-
-  async function loadMyRequests() {
-    const container =
-      document.getElementById("myRequests");
-
-    container.innerHTML =
-      '<p class="loading">Loading requests...</p>';
-
-    try {
-      const data =
-        await apiRequest("/requests");
-
-      const requests =
-        data.requests || [];
-
-      if (requests.length === 0) {
-        container.innerHTML =
-          '<p class="small">No requests found.</p>';
-
-        return;
-      }
-
-      container.innerHTML =
-        requests
-          .map(renderEmployeeRequest)
-          .join("");
-
-    } catch (error) {
-      console.error(error);
-
-      container.innerHTML =
-        `<p class="small">${escapeHtml(error.message)}</p>`;
-    }
-  }
-
-
-  function renderEmployeeRequest(request) {
-    const canRevoke =
-      request.status === "active";
-
-    return `
-      <div class="request-card">
-
-        <div>
-          <strong>
-            ${escapeHtml(request.permission)}
-          </strong>
-
-          ${statusBadge(request.status)}
-        </div>
-
-        <div class="request-meta">
-          Reason:
-          ${escapeHtml(request.reason || "-")}
-        </div>
-
-        <div class="request-meta">
-          Duration:
-          ${escapeHtml(String(request.durationMinutes || "-"))}
-          minutes
-        </div>
-
-        <div class="request-meta">
-          Requested:
-          ${formatDate(request.requestedAt)}
-        </div>
-
-        ${
-          request.decidedBy
-            ? `
-              <div class="request-meta">
-                Decided by:
-                ${escapeHtml(request.decidedBy)}
-              </div>
-            `
-            : ""
-        }
-
-        ${
-          request.expiresAt
-            ? `
-              <div class="request-meta">
-                Expires:
-                ${formatDate(request.expiresAt)}
-              </div>
-            `
-            : ""
-        }
-
-        ${
-          request.revokedAt
-            ? `
-              <div class="request-meta">
-                Revoked:
-                ${formatDate(request.revokedAt)}
-              </div>
-            `
-            : ""
-        }
-
-        ${
-          canRevoke
-            ? `
-              <div class="actions">
-                <button
-                  class="danger"
-                  onclick="revokeRequest('${request.requestId}')"
-                >
-                  Revoke Access
-                </button>
-              </div>
-            `
-            : ""
-        }
-
-      </div>
-    `;
-  }
-
-
-  // ============================================================
-  // MANAGER - PENDING REQUESTS
-  // ============================================================
-
-  async function loadPendingRequests() {
-    const container =
-      document.getElementById("pendingRequests");
-
-    container.innerHTML =
-      '<p class="loading">Loading pending requests...</p>';
-
-    try {
-      const data =
-        await apiRequest(
-          "/requests?status=pending"
-        );
-
-      const requests =
-        data.requests || [];
-
-      if (requests.length === 0) {
-        container.innerHTML =
-          '<p class="small">No pending requests.</p>';
-
-        return;
-      }
-
-      container.innerHTML =
-        requests
-          .map(renderManagerRequest)
-          .join("");
-
-    } catch (error) {
-      console.error(error);
-
-      container.innerHTML =
-        `<p class="small">${escapeHtml(error.message)}</p>`;
-    }
-  }
-
-
-  function renderManagerRequest(request) {
-    return `
-      <div class="request-card">
-
-        <div>
-          <strong>
-            ${escapeHtml(request.permission)}
-          </strong>
-
-          ${statusBadge(request.status)}
-        </div>
-
-        <div class="request-meta">
-          Employee:
-          ${escapeHtml(request.requesterEmail || "Unknown")}
-        </div>
-
-        <div class="request-meta">
-          Reason:
-          ${escapeHtml(request.reason || "-")}
-        </div>
-
-        <div class="request-meta">
-          Duration:
-          ${escapeHtml(String(request.durationMinutes || "-"))}
-          minutes
-        </div>
-
-        <div class="request-meta">
-          Requested:
-          ${formatDate(request.requestedAt)}
-        </div>
-
-        <div class="actions">
-
-          <button
-            class="success"
-            onclick="decideRequest('${request.requestId}', 'approve')"
-          >
-            Approve
-          </button>
-
-          <button
-            class="danger"
-            onclick="decideRequest('${request.requestId}', 'deny')"
-          >
-            Deny
-          </button>
-
-        </div>
-
-      </div>
-    `;
-  }
-
-
-  // ============================================================
-  // MANAGER - APPROVE / DENY
-  // ============================================================
-
-  async function decideRequest(requestId, decision) {
-    const label =
-      decision === "approve"
-        ? "approve"
-        : "deny";
-
-    const confirmed =
-      confirm(
-        `Are you sure you want to ${label} this request?`
-      );
-
-    if (!confirmed) {
-      return;
-    }
-
-    try {
-      const data =
-        await apiRequest(
-          `/requests/${encodeURIComponent(requestId)}/approve`,
-          {
-            method: "POST",
-
-            body: JSON.stringify({
-              decision
-            })
-          }
-        );
-
-      showMessage(
-        "managerMessage",
-        `Request ${data.status}.`,
-        "success"
-      );
-
-      await loadPendingRequests();
-      await loadActiveRequests();
-      if (!isManager) {
-        await loadMyRequests();
-      }
-
-    } catch (error) {
-      console.error(error);
-
-      showMessage(
-        "managerMessage",
-        error.message,
-        "error"
-      );
-    }
-  }
-
-
-  // ============================================================
-  // MANAGER - ACTIVE REQUESTS
-  // ============================================================
-
-  async function loadActiveRequests() {
-    const container =
-      document.getElementById("activeRequests");
-
-    container.innerHTML =
-      '<p class="loading">Loading active requests...</p>';
-
-    try {
-      const data =
-        await apiRequest(
-          "/requests?status=active"
-        );
-
-      const requests =
-        data.requests || [];
-
-      if (requests.length === 0) {
-        container.innerHTML =
-          '<p class="small">No active grants.</p>';
-
-        return;
-      }
-
-      container.innerHTML =
-        requests
-          .map(renderActiveRequest)
-          .join("");
-
-    } catch (error) {
-      console.error(error);
-
-      container.innerHTML =
-        `<p class="small">${escapeHtml(error.message)}</p>`;
-    }
-  }
-
-
-  function renderActiveRequest(request) {
-    return `
-      <div class="request-card">
-
-        <div>
-          <strong>
-            ${escapeHtml(request.permission)}
-          </strong>
-
-          ${statusBadge(request.status)}
-        </div>
-
-        <div class="request-meta">
-          Employee:
-          ${escapeHtml(request.requesterEmail || "Unknown")}
-        </div>
-
-        <div class="request-meta">
-          Duration:
-          ${escapeHtml(String(request.durationMinutes || "-"))}
-          minutes
-        </div>
-
-        <div class="request-meta">
-          Expires:
-          ${formatDate(request.expiresAt)}
-        </div>
-
-        <div class="actions">
-
-          <button
-            class="danger"
-            onclick="revokeRequest('${request.requestId}')"
-          >
-            Revoke Access
-          </button>
-
-        </div>
-
-      </div>
-    `;
-  }
-
-
-  // ============================================================
-  // REVOKE
-  // ============================================================
-
-  async function revokeRequest(requestId) {
-    const confirmed =
-      confirm(
-        "Are you sure you want to revoke this access?"
-      );
-
-    if (!confirmed) {
-      return;
-    }
-
-    try {
-      const data =
-        await apiRequest(
-          `/requests/${encodeURIComponent(requestId)}`,
-          {
-            method: "DELETE"
-          }
-        );
-
-      const message =
-        `Access revoked. Status: ${data.status}`;
-
-      if (isManager) {
-        showMessage(
-          "managerMessage",
-          message,
-          "success"
-        );
-
-        await loadPendingRequests();
-        await loadActiveRequests();
-
-      } else {
-        showMessage(
-          "requestMessage",
-          message,
-          "success"
-        );
-      }
-
-      if (!isManager) {
-        await loadMyRequests();
-      }
-
-    } catch (error) {
-      console.error(error);
-
-      if (isManager) {
-        showMessage(
-          "managerMessage",
-          error.message,
-          "error"
-        );
-      } else {
-        showMessage(
-          "requestMessage",
-          error.message,
-          "error"
-        );
-      }
-    }
-  }
-
-
-  // ============================================================
-  // LOGOUT
-  // ============================================================
-
-  function logout() {
-    idToken = null;
-    accessToken = null;
-    currentUser = null;
-    isManager = false;
-
-    sessionStorage.removeItem("jit_id_token");
-    sessionStorage.removeItem("jit_access_token");
-
-    document
-      .getElementById("loginPage")
-      .classList.remove("hidden");
-
-    document
-      .getElementById("employeePage")
-      .classList.add("hidden");
-
-    document
-      .getElementById("managerPage")
-      .classList.add("hidden");
-
-    document
-      .getElementById("userInfo")
-      .classList.add("hidden");
-
-    document.getElementById("password").value = "";
-
-    clearMessage("loginMessage");
-  }
-
-
-  // ============================================================
-  // BASIC HTML ESCAPING
-  // ============================================================
-
-  function escapeHtml(value) {
-    return String(value ?? "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#039;");
-  }
-
-
-  // ============================================================
-  // RESTORE EXISTING SESSION
-  // ============================================================
-
-  function restoreSession() {
-    const savedIdToken =
-      sessionStorage.getItem("jit_id_token");
-
-    const savedAccessToken =
-      sessionStorage.getItem("jit_access_token");
-
-    if (!savedIdToken) {
-      return;
-    }
-
-    const claims =
-      decodeJwt(savedIdToken);
-
-    if (!claims.exp ||
-        claims.exp * 1000 <= Date.now()) {
-
-      sessionStorage.clear();
-      return;
-    }
-
-    idToken = savedIdToken;
-    accessToken = savedAccessToken;
-
-    currentUser = {
-      username: claims.email || claims.username || "User",
-      sub: claims.sub
-    };
-
-    const groups =
-      claims["cognito:groups"] || [];
-
-    if (Array.isArray(groups)) {
-      isManager =
-        groups.includes("approvers");
-    } else {
-      isManager =
-        String(groups)
-          .replace(/[\[\]]/g, "")
-          .split(",")
-          .map(x => x.trim())
-          .includes("approvers");
-    }
-
+    const data=await response.json();
+    if(data.ChallengeName)throw new Error("This account must complete a Cognito challenge ("+data.ChallengeName+") before signing in, such as setting a new password.");
+    if(!response.ok)throw new Error(data.message||"Cognito authentication failed.");
+    if(!data.AuthenticationResult)throw new Error("Cognito did not return an authentication result.");
+    idToken=data.AuthenticationResult.IdToken;
+    accessToken=data.AuthenticationResult.AccessToken;
+    const claims=decodeJwt(idToken);
+    currentUser={username:claims.email||username,sub:claims.sub};
+    isManager=groupsToManager(claims);
+    sessionStorage.setItem("jit_id_token",idToken);
+    sessionStorage.setItem("jit_access_token",accessToken);
     showDashboard();
-  }
+  }catch(error){console.error(error);showMessage("loginMessage",error.message||"Sign in failed.","error")}
+  finally{setBusy(btn,false)}
+}
 
+// ============================================================
+// DASHBOARD + NAVIGATION
+// ============================================================
+function showDashboard(){
+  $("loginPage").classList.add("hidden");
+  $("app").classList.remove("hidden");
+  $("loggedInUser").textContent=currentUser.username;
+  $("avatar").textContent=(currentUser.username||"?")[0].toUpperCase();
+  $("userRole").textContent=isManager?"Role: Approver / Manager":"Role: Employee";
+  $(isManager?"managerPage":"employeePage").classList.remove("hidden");
+  const nav=isManager?NAV_M:NAV_E;
+  $("nav").innerHTML=nav.map(n=>`<button type="button" data-go="${n[0]}">${n[1]}${n[0]==="pending"?'<span class="pill" id="pendPill"></span>':""}</button>`).join("");
+  go(nav[0][0]);
+  reload();
+}
+function go(v){
+  view=v;
+  const nav=isManager?NAV_M:NAV_E,n=nav.find(x=>x[0]===v);
+  $(isManager?"managerPage":"employeePage").querySelectorAll("[data-view]").forEach(s=>s.classList.toggle("hidden",s.dataset.view!==v));
+  document.querySelectorAll("#nav button").forEach(b=>b.dataset.go===v?b.setAttribute("aria-current","page"):b.removeAttribute("aria-current"));
+  $("pageTitle").textContent=n[1];$("pageSub").textContent=n[2];
+  $("stats").classList.toggle("hidden",v==="request");
+  $("refreshBtn").classList.toggle("hidden",v==="request");
+  tick();
+}
+const reload=()=>isManager?loadManager():loadMine();
 
-  // Start application.
-  restoreSession();
+// ============================================================
+// EMPLOYEE
+// ============================================================
+async function createRequest(){
+  clearMessage("requestMessage");
+  const permission=$("permission").value,reason=$("reason").value.trim();
+  const durationMinutes=Number(document.querySelector('input[name="dur"]:checked').value);
+  if(!reason){showMessage("requestMessage","Enter a reason so the approver knows why you need access.","error");$("reason").focus();return}
+  const btn=$("requestBtn");
+  try{
+    setBusy(btn,true,"Sending request...");
+    const data=await apiRequest("/requests",{method:"POST",body:JSON.stringify({permission,reason,durationMinutes})});
+    showMessage("requestMessage",`Request sent. An approver will review it. Request ID: ${data.requestId}`,"success");
+    $("reason").value="";$("reasonCount").textContent="0 / 500";
+    await loadMine();
+  }catch(error){console.error(error);showMessage("requestMessage",error.message,"error")}
+  finally{setBusy(btn,false)}
+}
 
+async function loadMine(){
+  $("mineCards").innerHTML=skel;$("myRequests").innerHTML=skel;
+  try{
+    const data=await apiRequest("/requests");
+    myList=prep(data.requests);
+    renderMine();
+  }catch(error){console.error(error);$("mineCards").innerHTML=errBox(error.message);$("myRequests").innerHTML=errBox(error.message)}
+}
+
+function renderMine(){
+  const n=k=>myList.filter(r=>r.status===k).length;
+  const ended=myList.filter(r=>r.status!=="pending"&&r.status!=="active").length;
+  $("stats").innerHTML=stat("Active",n("active"),"active")+stat("Pending",n("pending"),"pending")+stat("Ended",ended,"ended")+stat("Total",myList.length,"total");
+  const live=myList.filter(r=>r.status==="active"||r.status==="pending").sort((a,b)=>(b.status==="active")-(a.status==="active"));
+  $("mineCards").innerHTML=live.length?`<div class="cards">${live.map(r=>card(r,false)).join("")}</div>`
+    :empty("No active or pending access","You currently have no temporary permissions.",'<div style="margin-top:14px"><button class="btn primary" data-go="request">Request access</button></div>');
+  const count=k=>k==="all"?myList.length:n(k);
+  $("tabs").innerHTML=TABS.map(([k,l])=>`<button class="tab" type="button" data-tab="${k}" aria-pressed="${k===myFilter}">${l}<b>${count(k)}</b></button>`).join("");
+  const rows=myFilter==="all"?myList:myList.filter(r=>r.status===myFilter);
+  $("myRequests").innerHTML=!myList.length?empty("No requests yet","Your history will appear here."):!rows.length?empty("Nothing here","No "+STATUS[myFilter].toLowerCase()+" requests."):histTable(rows,false);
+  tick();
+}
+
+function histTable(rows,m){
+  const cols=[["Permission",r=>`<div class="perm">${permName(r.permission)}</div><div class="reason">${esc(r.reason||"-")}</div>`]];
+  if(m)cols.push(["Employee",r=>esc(r.requesterEmail||"Unknown")]);
+  cols.push(["Status",r=>badge(r.status)+(r.decidedBy&&r.status!=="pending"?`<div class="mut" style="margin-top:4px">by ${esc(r.decidedBy)}</div>`:"")],
+    ["Duration",r=>formatDuration(r.durationMinutes)],
+    ["Requested",r=>formatDate(r.requestedAt)],
+    ["Access window",r=>r.status==="active"?countdown(r):r.revokedAt?`Revoked ${formatDate(r.revokedAt)}`:r.expiresAt?`${r.status==="expired"?"Expired":"Expires"} ${formatDate(r.expiresAt)}`:"-"],
+    ["",detailBtn]);
+  return table(rows,cols);
+}
+
+// ============================================================
+// MANAGER
+// ============================================================
+async function loadManager(){
+  ["pendingRequests","activeRequests","endedRequests"].forEach(i=>$(i).innerHTML=skel);
+  const res=await Promise.allSettled([apiRequest("/requests?status=pending"),apiRequest("/requests?status=active"),...ENDED.map(s=>apiRequest("/requests?status="+s))]);
+  const [p,a,...e]=res;
+  const fail=(id,x)=>{$(id).innerHTML=errBox(x.reason.message)};
+  if(p.status==="fulfilled")mgr.pending=prep(p.value.requests);else{fail("pendingRequests",p);mgr.pending=[]}
+  if(a.status==="fulfilled")mgr.active=prep(a.value.requests);else{fail("activeRequests",a);mgr.active=[]}
+  mgr.ended=prep(e.filter(x=>x.status==="fulfilled").flatMap(x=>x.value.requests||[]));
+  $("stats").innerHTML=stat("Pending",mgr.pending.length,"pending")+stat("Active grants",mgr.active.length,"active")+stat("Ended",mgr.ended.length,"ended");
+  $("pendPill").textContent=mgr.pending.length||"";
+  if(p.status==="fulfilled")$("pendingRequests").innerHTML=mgr.pending.length?`<div class="cards">${mgr.pending.map(r=>card(r,true)).join("")}</div>`:empty("All caught up","No requests are waiting for approval.");
+  if(a.status==="fulfilled")$("activeRequests").innerHTML=mgr.active.length?`<div class="cards">${mgr.active.map(r=>card(r,true)).join("")}</div>`:empty("No active grants","No one currently has temporary access.");
+  $("endedRequests").innerHTML=e.every(x=>x.status==="rejected")?errBox("Could not load access history: "+e[0].reason.message):mgr.ended.length?histTable(mgr.ended,true):empty("No ended access yet","Expired, denied and revoked requests will appear here.");
+  tick();
+}
+
+async function decideRequest(requestId,decision,btn){
+  const approve=decision==="approve";
+  const ok=await confirmDialog(approve?"Approve this request?":"Deny this request?",
+    approve?"Temporary access is granted right away and revoked automatically when the time is up.":"The employee will not receive access.",
+    approve?"Approve":"Deny",!approve);
+  if(!ok)return;
+  try{
+    setBusy(btn,true,approve?"Approving...":"Denying...");
+    const data=await apiRequest(`/requests/${encodeURIComponent(requestId)}/approve`,{method:"POST",body:JSON.stringify({decision})});
+    toast(`Request ${data.status||(approve?"approved":"denied")}.`);
+    await loadManager();
+  }catch(error){console.error(error);setBusy(btn,false);toast(error.message,"error")}
+}
+
+// ============================================================
+// REVOKE
+// ============================================================
+async function revokeRequest(requestId,btn){
+  const ok=await confirmDialog("Revoke this access?","The temporary permissions are removed immediately.","Revoke access",true);
+  if(!ok)return;
+  try{
+    setBusy(btn,true,"Revoking...");
+    const data=await apiRequest(`/requests/${encodeURIComponent(requestId)}`,{method:"DELETE"});
+    toast(`Access revoked. Status: ${STATUS[data.status]||data.status}`);
+    await reload();
+  }catch(error){console.error(error);setBusy(btn,false);toast(error.message,"error")}
+}
+
+// ============================================================
+// LOGOUT
+// ============================================================
+function logout(notice){
+  idToken=accessToken=currentUser=null;isManager=false;myList=[];myFilter="all";cache={};
+  sessionStorage.removeItem("jit_id_token");sessionStorage.removeItem("jit_access_token");
+  $("app").classList.add("hidden");$("employeePage").classList.add("hidden");$("managerPage").classList.add("hidden");
+  $("loginPage").classList.remove("hidden");
+  $("password").value="";
+  clearMessage("loginMessage");
+  if(typeof notice==="string")showMessage("loginMessage",notice,"info");
+}
+
+// ============================================================
+// EVENTS
+// ============================================================
+$("loginBtn").addEventListener("click",login);
+["username","password"].forEach(i=>$(i).addEventListener("keydown",e=>{if(e.key==="Enter")login()}));
+$("logoutBtn").addEventListener("click",()=>logout());
+$("requestBtn").addEventListener("click",createRequest);
+$("refreshBtn").addEventListener("click",reload);
+$("detailClose").addEventListener("click",()=>$("detail").close());
+$("reason").addEventListener("input",e=>{$("reasonCount").textContent=e.target.value.length+" / 500"});
+document.addEventListener("click",e=>{
+  const g=e.target.closest("[data-go]");if(g){go(g.dataset.go);return}
+  const tab=e.target.closest("[data-tab]");if(tab){myFilter=tab.dataset.tab;renderMine();return}
+  const b=e.target.closest("[data-act]");if(!b)return;
+  const id=b.dataset.id,a=b.dataset.act;
+  if(a==="detail")showDetail(id);
+  else if(a==="revoke")revokeRequest(id,b);
+  else decideRequest(id,a,b);
+});
+
+// ============================================================
+// RESTORE EXISTING SESSION
+// ============================================================
+function restoreSession(){
+  const saved=sessionStorage.getItem("jit_id_token");
+  if(!saved)return;
+  const claims=decodeJwt(saved);
+  if(!claims.exp||claims.exp*1000<=Date.now()){sessionStorage.removeItem("jit_id_token");sessionStorage.removeItem("jit_access_token");return}
+  idToken=saved;
+  accessToken=sessionStorage.getItem("jit_access_token");
+  currentUser={username:claims.email||claims.username||"User",sub:claims.sub};
+  isManager=groupsToManager(claims);
+  showDashboard();
+}
+restoreSession();
 </script>
-
 </body>
 </html>
