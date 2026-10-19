@@ -154,6 +154,15 @@ class ApproveAccessTests(unittest.TestCase):
 
         self.assertEqual(response["statusCode"], 400)
 
+    def test_non_object_body_returns_400(self):
+        response = app.handler(
+            self.make_event(body=["approve"]),
+            None,
+        )
+
+        self.assertEqual(response["statusCode"], 400)
+        self.assertIn("JSON object", json.loads(response["body"])["message"])
+
     def test_request_not_found_returns_404(self):
         self.table.get_item.return_value = {}
 
@@ -292,6 +301,53 @@ class ApproveAccessTests(unittest.TestCase):
 
         # Verify the lifecycle notification was sent.
         self.sns.publish.assert_called_once()
+
+    def test_unknown_permission_returns_500_without_granting_access(self):
+        self.table.get_item.return_value = {
+            "Item": {
+                "requestId": "req-123",
+                "permission": "unknown-permission",
+                "status": "pending",
+                "durationMinutes": 60,
+            }
+        }
+
+        response = app.handler(self.make_event(), None)
+
+        self.assertEqual(response["statusCode"], 500)
+        self.iam.put_role_policy.assert_not_called()
+        self.scheduler.create_schedule.assert_not_called()
+
+    def test_incomplete_access_window_returns_400(self):
+        self.table.get_item.return_value = {
+            "Item": {
+                "requestId": "req-123",
+                "permission": "s3-read-demo-bucket",
+                "status": "pending",
+                "accessStartAt": "4102444800",
+            }
+        }
+
+        response = app.handler(self.make_event(), None)
+
+        self.assertEqual(response["statusCode"], 400)
+        self.assertIn("both accessStartAt and accessEndAt", json.loads(response["body"])["message"])
+
+    def test_invalid_duration_returns_400_without_granting_access(self):
+        self.table.get_item.return_value = {
+            "Item": {
+                "requestId": "req-123",
+                "permission": "s3-read-demo-bucket",
+                "status": "pending",
+                "durationMinutes": 0,
+            }
+        }
+
+        response = app.handler(self.make_event(), None)
+
+        self.assertEqual(response["statusCode"], 400)
+        self.iam.put_role_policy.assert_not_called()
+        self.scheduler.create_schedule.assert_not_called()
 
     def test_future_window_schedules_activation_and_revocation_without_granting_early(self):
         import time
