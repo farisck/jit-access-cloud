@@ -15,6 +15,9 @@ os.environ["TARGET_ROLE_NAME"] = "ci-test-target-role"
 os.environ["REVOKE_FUNCTION_ARN"] = (
     "arn:aws:lambda:us-east-1:000000000000:function:ci-test-revoke"
 )
+os.environ["ACTIVATE_FUNCTION_ARN"] = (
+    "arn:aws:lambda:us-east-1:000000000000:function:ci-test-activate"
+)
 os.environ["SCHEDULER_ROLE_ARN"] = (
     "arn:aws:iam::000000000000:role/ci-test-scheduler-role"
 )
@@ -289,6 +292,120 @@ class ApproveAccessTests(unittest.TestCase):
 
         # Verify the lifecycle notification was sent.
         self.sns.publish.assert_called_once()
+
+    def test_future_window_schedules_activation_and_revocation_without_granting_early(self):
+        import time
+
+        start_epoch = int(time.time()) + 3600
+        end_epoch = start_epoch + 7200
+
+        self.table.get_item.return_value = {
+            "Item": {
+                "requestId": "req-123",
+                "permission": "s3-read-demo-bucket",
+                "status": "pending",
+                "accessStartAt": str(start_epoch),
+                "accessEndAt": str(end_epoch),
+            }
+        }
+
+        event = self.make_event(body={"decision": "approve"})
+        response = app.handler(event, None)
+
+        self.assertEqual(response["statusCode"], 200)
+        body = json.loads(response["body"])
+        self.assertEqual(body["requestId"], "req-123")
+        self.assertEqual(body["status"], "scheduled")
+        self.assertEqual(body["accessStartAt"], start_epoch)
+        self.assertEqual(body["accessEndAt"], end_epoch)
+
+        # Future access must not be granted immediately.
+        self.iam.put_role_policy.assert_not_called()
+
+        # Both activation and expiry schedules must be created.
+        self.assertEqual(self.scheduler.create_schedule.call_count, 2)
+        schedules = {
+            call.kwargs["Name"]: call.kwargs
+            for call in self.scheduler.create_schedule.call_args_list
+        }
+
+        self.assertIn("jit-activate-req-123", schedules)
+        self.assertIn("jit-revoke-req-123", schedules)
+
+        self.assertEqual(
+            schedules["jit-activate-req-123"]["Target"]["Arn"],
+            "arn:aws:lambda:us-east-1:000000000000:function:ci-test-activate",
+        )
+        self.assertEqual(
+            schedules["jit-revoke-req-123"]["Target"]["Arn"],
+            "arn:aws:lambda:us-east-1:000000000000:function:ci-test-revoke",
+        )
+
+        activation_input = json.loads(
+            schedules["jit-activate-req-123"]["Target"]["Input"]
+        )
+        revocation_input = json.loads(
+            schedules["jit-revoke-req-123"]["Target"]["Input"]
+        )
+        self.assertEqual(activation_input["requestId"], "req-123")
+        self.assertEqual(revocation_input["requestId"], "req-123")
+        self.assertEqual(revocation_input["reason"], "scheduled_expiry")
+
+        # DynamoDB should record the request as scheduled.
+        self.table.update_item.assert_called_once()
+        update_values = self.table.update_item.call_args.kwargs[
+            "ExpressionAttributeValues"
+        ]
+        self.assertEqual(update_values[":status"], "scheduled")
+        self.assertEqual(
+            update_values[":activate"], "jit-activate-req-123"
+        )
+        self.assertEqual(update_values[":sched"], "jit-revoke-req-123")
+
+        self.sns.publish.assert_called_once()
+
+    def test_future_window_revocation_schedule_failure_cleans_up_activation(self):
+        from botocore.exceptions import ClientError
+        import time
+
+        start_epoch = int(time.time()) + 3600
+        end_epoch = start_epoch + 7200
+        self.table.get_item.return_value = {
+            "Item": {
+                "requestId": "req-123",
+                "permission": "s3-read-demo-bucket",
+                "status": "pending",
+                "accessStartAt": str(start_epoch),
+                "accessEndAt": str(end_epoch),
+            }
+        }
+        self.scheduler.create_schedule.side_effect = [
+            None,
+            ClientError(
+                {
+                    "Error": {
+                        "Code": "InternalServerError",
+                        "Message": "Simulated revocation scheduling failure",
+                    }
+                },
+                "CreateSchedule",
+            ),
+        ]
+
+        response = app.handler(
+            self.make_event(body={"decision": "approve"}),
+            None,
+        )
+
+        self.assertEqual(response["statusCode"], 500)
+        self.iam.put_role_policy.assert_not_called()
+        self.assertEqual(self.scheduler.create_schedule.call_count, 2)
+        self.scheduler.delete_schedule.assert_called_once_with(
+            Name="jit-activate-req-123",
+            GroupName="ci-test-schedule-group",
+        )
+        self.table.update_item.assert_not_called()
+        self.sns.publish.assert_not_called()
 
     def test_scheduler_failure_rolls_back_iam_policy(self):
         from botocore.exceptions import ClientError

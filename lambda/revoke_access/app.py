@@ -32,10 +32,12 @@ from botocore.exceptions import ClientError
 dynamodb = boto3.resource("dynamodb")
 iam = boto3.client("iam")
 sns = boto3.client("sns")
+scheduler = boto3.client("scheduler")
 
 TABLE_NAME = os.environ["REQUESTS_TABLE_NAME"]
 TOPIC_ARN = os.environ["NOTIFICATIONS_TOPIC_ARN"]
 TARGET_ROLE_NAME = os.environ["TARGET_ROLE_NAME"]
+SCHEDULE_GROUP_NAME = os.environ["SCHEDULE_GROUP_NAME"]
 
 table = dynamodb.Table(TABLE_NAME)
 
@@ -76,6 +78,44 @@ def _revoke(request_id, reason, actor):
         return {"requestId": request_id, "status": "not_found"}
 
     current_status = item.get("status")
+    if current_status == "scheduled" and reason != "scheduled_expiry":
+        for schedule_key in ("activationScheduleName", "scheduleName"):
+            schedule_name = item.get(schedule_key)
+            if not schedule_name:
+                continue
+            try:
+                scheduler.delete_schedule(
+                    Name=schedule_name,
+                    GroupName=SCHEDULE_GROUP_NAME,
+                )
+            except scheduler.exceptions.ResourceNotFoundException:
+                pass
+
+        now_epoch = int(time.time())
+        table.update_item(
+            Key={"requestId": request_id},
+            UpdateExpression="SET #s = :status, revokedAt = :at, revokedBy = :by",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={
+                ":status": "revoked_early",
+                ":at": str(now_epoch),
+                ":by": actor or "scheduler",
+            },
+        )
+        try:
+            sns.publish(
+                TopicArn=TOPIC_ARN,
+                Subject=f"Access revoked: {request_id}"[:100],
+                Message=(
+                    f"requestId={request_id}\n"
+                    "status=revoked_early\n"
+                    f"revokedBy={actor or 'scheduler'}"
+                ),
+            )
+        except ClientError as exc:
+            print(f"SNS publish failed (non-fatal): {exc}")
+        return {"requestId": request_id, "status": "revoked_early"}
+
     if current_status != "active":
         # Idempotent: already revoked/expired/denied - nothing to do.
         print(f"revoke_access: {request_id} is '{current_status}', not 'active' - no-op success")

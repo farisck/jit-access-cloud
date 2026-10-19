@@ -14,6 +14,7 @@ os.environ["NOTIFICATIONS_TOPIC_ARN"] = (
     "arn:aws:sns:us-east-1:000000000000:ci-test-topic"
 )
 os.environ["TARGET_ROLE_NAME"] = "ci-test-target-role"
+os.environ["SCHEDULE_GROUP_NAME"] = "ci-test-schedule-group"
 
 # Load this Lambda's app.py explicitly.
 app_path = os.path.join(
@@ -38,19 +39,26 @@ class RevokeAccessTests(unittest.TestCase):
             "NoSuchEntityException", (Exception,), {}
         )
         self.scheduler_sns = Mock()
+        self.scheduler = Mock()
+        self.scheduler.exceptions.ResourceNotFoundException = type(
+            "ResourceNotFoundException", (Exception,), {}
+        )
 
         self.original_table = app.table
         self.original_iam = app.iam
         self.original_sns = app.sns
+        self.original_scheduler = app.scheduler
 
         app.table = self.table
         app.iam = self.iam
         app.sns = self.scheduler_sns
+        app.scheduler = self.scheduler
 
     def tearDown(self):
         app.table = self.original_table
         app.iam = self.original_iam
         app.sns = self.original_sns
+        app.scheduler = self.original_scheduler
 
     def make_active_item(self, **overrides):
         item = {
@@ -304,3 +312,44 @@ class RevokeAccessTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "expired")
         self.table.update_item.assert_called_once()
+
+    def test_manual_revoke_of_scheduled_request_cancels_future_access(self):
+        self.table.get_item.return_value = {
+            "Item": self.make_active_item(
+                status="scheduled",
+                activationScheduleName="jit-activate-req-123",
+                scheduleName="jit-revoke-req-123",
+            )
+        }
+        event = {
+            "requestContext": {
+                "http": {"method": "DELETE"},
+                "authorizer": {
+                    "jwt": {
+                        "claims": {
+                            "sub": "employee-123",
+                            "email": "employee@example.com",
+                            "cognito:groups": "[]",
+                        }
+                    }
+                },
+            },
+            "pathParameters": {"requestId": "req-123"},
+        }
+
+        response = app.handler(event, None)
+
+        self.assertEqual(response["statusCode"], 200)
+        self.assertEqual(
+            json.loads(response["body"])["status"],
+            "revoked_early",
+        )
+        self.assertEqual(self.scheduler.delete_schedule.call_count, 2)
+        self.assertEqual(
+            {
+                call.kwargs["Name"]
+                for call in self.scheduler.delete_schedule.call_args_list
+            },
+            {"jit-activate-req-123", "jit-revoke-req-123"},
+        )
+        self.iam.delete_role_policy.assert_not_called()

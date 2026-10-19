@@ -4,6 +4,7 @@ import os
 import sys
 import types
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -204,6 +205,119 @@ class RequestAccessTests(unittest.TestCase):
 
         self.assertEqual(response["statusCode"], 200)
         self.table.put_item.assert_called_once()
+
+
+    @staticmethod
+    def make_window(start, end):
+        return {
+            "permission": "s3-read-demo-bucket",
+            "reason": "Test time-limited access",
+            "accessStartAt": start.isoformat(),
+            "accessEndAt": end.isoformat(),
+        }
+
+    def test_valid_future_access_window_is_stored(self):
+        start = datetime.now(timezone.utc) + timedelta(minutes=10)
+        end = start + timedelta(minutes=60)
+
+        response = self.app.handler(
+            self.make_event(json.dumps(self.make_window(start, end))),
+            None,
+        )
+
+        self.assertEqual(response["statusCode"], 200)
+        item = self.table.put_item.call_args.kwargs["Item"]
+        self.assertEqual(item["durationMinutes"], 60)
+        self.assertEqual(int(item["accessStartAt"]), int(start.timestamp()))
+        self.assertEqual(int(item["accessEndAt"]), int(end.timestamp()))
+
+    def test_overnight_access_window_is_valid(self):
+        local_tz = timezone(timedelta(hours=5, minutes=30))
+        tomorrow = datetime.now(local_tz).date() + timedelta(days=1)
+
+        start = datetime(
+            tomorrow.year,
+            tomorrow.month,
+            tomorrow.day,
+            23,
+            30,
+            tzinfo=local_tz,
+        )
+        end = start + timedelta(hours=1)
+
+        response = self.app.handler(
+            self.make_event(json.dumps(self.make_window(start, end))),
+            None,
+        )
+
+        self.assertEqual(response["statusCode"], 200)
+        item = self.table.put_item.call_args.kwargs["Item"]
+        self.assertEqual(item["durationMinutes"], 60)
+
+    def test_past_access_start_returns_400(self):
+        start = datetime.now(timezone.utc) - timedelta(minutes=5)
+        end = start + timedelta(minutes=30)
+
+        response = self.app.handler(
+            self.make_event(json.dumps(self.make_window(start, end))),
+            None,
+        )
+
+        self.assertEqual(response["statusCode"], 400)
+        self.table.put_item.assert_not_called()
+
+    def test_end_before_start_returns_400(self):
+        start = datetime.now(timezone.utc) + timedelta(hours=2)
+        end = start - timedelta(minutes=30)
+
+        response = self.app.handler(
+            self.make_event(json.dumps(self.make_window(start, end))),
+            None,
+        )
+
+        self.assertEqual(response["statusCode"], 400)
+        self.table.put_item.assert_not_called()
+
+    def test_access_window_over_eight_hours_returns_400(self):
+        start = datetime.now(timezone.utc) + timedelta(minutes=10)
+        end = start + timedelta(minutes=481)
+
+        response = self.app.handler(
+            self.make_event(json.dumps(self.make_window(start, end))),
+            None,
+        )
+
+        self.assertEqual(response["statusCode"], 400)
+        self.table.put_item.assert_not_called()
+
+    def test_missing_or_malformed_access_timestamps_return_400(self):
+        start = datetime.now(timezone.utc) + timedelta(minutes=10)
+        end = start + timedelta(minutes=60)
+
+        payloads = [
+            {
+                "permission": "s3-read-demo-bucket",
+                "reason": "Test access",
+            },
+            {
+                **self.make_window(start, end),
+                "accessStartAt": "not-a-timestamp",
+            },
+            {
+                **self.make_window(start, end),
+                "accessEndAt": "not-a-timestamp",
+            },
+        ]
+
+        for payload in payloads:
+            with self.subTest(payload=payload):
+                response = self.app.handler(
+                    self.make_event(json.dumps(payload)),
+                    None,
+                )
+
+                self.assertEqual(response["statusCode"], 400)
+                self.table.put_item.assert_not_called()
 
 
 if __name__ == "__main__":
