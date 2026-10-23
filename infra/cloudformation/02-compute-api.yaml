@@ -61,6 +61,7 @@ Resources:
                 Resource:
                   - !GetAtt ActivateAccessFunction.Arn
                   - !GetAtt RevokeAccessFunction.Arn
+                  - !GetAtt ReconcileCleanupFunction.Arn
 
   # ---------------- IAM: one scoped role per function ----------------
 
@@ -242,8 +243,80 @@ Resources:
                     - "${Arn}/index/*"
                     - Arn: { Fn::ImportValue: !Sub "${ProjectName}-${EnvName}-RequestsTableArn" }
 
+  # ---------------- Cleanup reconciler IAM role ----------------
+  ReconcileCleanupRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${EnvName}-reconcile-cleanup-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: reconcile-cleanup-scoped-access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: WriteLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "arn:aws:logs:*:*:*"
+              - Sid: ReadAndUpdateRequests
+                Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:UpdateItem
+                Resource: !ImportValue
+                  Fn::Sub: "${ProjectName}-${EnvName}-RequestsTableArn"
+              - Sid: QueryCleanupPendingIndexOnly
+                Effect: Allow
+                Action: dynamodb:Query
+                Resource: !Sub
+                  - "${TableArn}/index/status-index"
+                  - TableArn: !ImportValue
+                      Fn::Sub: "${ProjectName}-${EnvName}-RequestsTableArn"
+              - Sid: DeletePoliciesOnlyOnTargetRole
+                Effect: Allow
+                Action: iam:DeleteRolePolicy
+                Resource: !ImportValue
+                  Fn::Sub: "${ProjectName}-${EnvName}-TargetRoleArn"
+              - Sid: PublishCleanupNotifications
+                Effect: Allow
+                Action: sns:Publish
+                Resource: !ImportValue
+                  Fn::Sub: "${ProjectName}-${EnvName}-NotificationsTopicArn"
   # ---------------- Lambda functions ----------------
 
+  ReconcileCleanupFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${EnvName}-reconcile-cleanup"
+      Runtime: python3.12
+      Handler: app.handler
+      Timeout: 60
+      MemorySize: 256
+      Role: !GetAtt ReconcileCleanupRole.Arn
+      Code: ../../lambda/reconcile_cleanup
+      Environment:
+        Variables:
+          REQUESTS_TABLE_NAME: !ImportValue
+            Fn::Sub: "${ProjectName}-${EnvName}-RequestsTableName"
+          NOTIFICATIONS_TOPIC_ARN: !ImportValue
+            Fn::Sub: "${ProjectName}-${EnvName}-NotificationsTopicArn"
+          TARGET_ROLE_NAME: !ImportValue
+            Fn::Sub: "${ProjectName}-${EnvName}-TargetRoleName"
+
+  ReconcileCleanupLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ReconcileCleanupFunction}"
+      RetentionInDays: !Ref LogRetentionDays
   RequestAccessFunction:
     Type: AWS::Lambda::Function
     Properties:
@@ -536,6 +609,28 @@ Resources:
       Principal: scheduler.amazonaws.com
       SourceArn: !Sub "arn:aws:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/${ScheduleGroup}/*"
 
+  ReconcileCleanupSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: !Sub "${ProjectName}-${EnvName}-reconcile-cleanup"
+      GroupName: !Ref ScheduleGroup
+      Description: Periodically reconcile requests awaiting access-policy cleanup
+      State: ENABLED
+      FlexibleTimeWindow:
+        Mode: "OFF"
+      ScheduleExpression: rate(5 minutes)
+      Target:
+        Arn: !GetAtt ReconcileCleanupFunction.Arn
+        RoleArn: !GetAtt SchedulerInvocationRole.Arn
+        Input: "{}"
+
+  ReconcileCleanupSchedulerInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ReconcileCleanupFunction
+      Action: lambda:InvokeFunction
+      Principal: scheduler.amazonaws.com
+      SourceArn: !GetAtt ReconcileCleanupSchedule.Arn
   HttpApiStage:
     Type: AWS::ApiGatewayV2::Stage
     Properties:

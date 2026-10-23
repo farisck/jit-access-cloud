@@ -1,7 +1,9 @@
 import importlib.util
+import io
 import json
 import os
 import unittest
+from contextlib import redirect_stdout
 from unittest.mock import Mock
 
 
@@ -171,6 +173,9 @@ class ApproveAccessTests(unittest.TestCase):
         response = app.handler(event, None)
 
         self.assertEqual(response["statusCode"], 404)
+        self.table.get_item.assert_called_once_with(
+            Key={"requestId": "req-123"}, ConsistentRead=True
+        )
         self.assertEqual(self.iam.put_role_policy.call_count, 0)
         self.assertEqual(self.scheduler.create_schedule.call_count, 0)
 
@@ -191,6 +196,44 @@ class ApproveAccessTests(unittest.TestCase):
         self.assertEqual(response["statusCode"], 409)
         self.assertEqual(self.iam.put_role_policy.call_count, 0)
         self.assertEqual(self.scheduler.create_schedule.call_count, 0)
+
+    def test_approver_cannot_approve_their_own_request(self):
+        self.table.get_item.return_value = {
+            "Item": {
+                "requestId": "req-123",
+                "requesterId": "approver-123",
+                "permission": "s3-read-demo-bucket",
+                "status": "pending",
+                "durationMinutes": 60,
+            }
+        }
+
+        response = app.handler(
+            self.make_event(body={"decision": "approve"}), None
+        )
+
+        self.assertEqual(response["statusCode"], 403)
+        self.iam.put_role_policy.assert_not_called()
+        self.scheduler.create_schedule.assert_not_called()
+        self.table.update_item.assert_not_called()
+        self.sns.publish.assert_not_called()
+
+    def test_approver_may_deny_their_own_request(self):
+        self.table.get_item.return_value = {
+            "Item": {
+                "requestId": "req-123",
+                "requesterId": "approver-123",
+                "permission": "s3-read-demo-bucket",
+                "status": "pending",
+                "durationMinutes": 60,
+            }
+        }
+
+        response = app.handler(
+            self.make_event(body={"decision": "deny"}), None
+        )
+
+        self.assertEqual(response["statusCode"], 200)
 
     def test_deny_request_updates_status_and_notifies(self):
         self.table.get_item.return_value = {
@@ -216,6 +259,10 @@ class ApproveAccessTests(unittest.TestCase):
 
         self.table.update_item.assert_called_once()
         update_kwargs = self.table.update_item.call_args.kwargs
+        self.assertEqual(update_kwargs["ConditionExpression"], "#s = :pending")
+        self.assertEqual(
+            update_kwargs["ExpressionAttributeValues"][":pending"], "pending"
+        )
         self.assertEqual(
             update_kwargs["ExpressionAttributeValues"][":status"],
             "denied",
@@ -228,6 +275,30 @@ class ApproveAccessTests(unittest.TestCase):
         self.sns.publish.assert_called_once()
         self.iam.put_role_policy.assert_not_called()
         self.scheduler.create_schedule.assert_not_called()
+
+    def test_deny_losing_the_race_returns_409_without_notifying(self):
+        from botocore.exceptions import ClientError
+
+        self.table.get_item.return_value = {
+            "Item": {
+                "requestId": "req-123",
+                "permission": "s3-read-demo-bucket",
+                "status": "pending",
+                "durationMinutes": 60,
+            }
+        }
+        # Someone else changed the request after our read.
+        self.table.update_item.side_effect = ClientError(
+            {"Error": {"Code": "ConditionalCheckFailedException"}},
+            "UpdateItem",
+        )
+
+        response = app.handler(
+            self.make_event(body={"decision": "deny"}), None
+        )
+
+        self.assertEqual(response["statusCode"], 409)
+        self.sns.publish.assert_not_called()
 
     def test_approve_request_grants_access_and_schedules_revocation(self):
         self.table.get_item.return_value = {
@@ -292,6 +363,7 @@ class ApproveAccessTests(unittest.TestCase):
         # Verify DynamoDB was updated to active.
         self.table.update_item.assert_called_once()
         update_kwargs = self.table.update_item.call_args.kwargs
+        self.assertEqual(update_kwargs["ConditionExpression"], "#s = :pending")
         values = update_kwargs["ExpressionAttributeValues"]
 
         self.assertEqual(values[":status"], "active")
@@ -301,6 +373,69 @@ class ApproveAccessTests(unittest.TestCase):
 
         # Verify the lifecycle notification was sent.
         self.sns.publish.assert_called_once()
+
+    def test_legacy_grant_policy_stops_matching_at_expiry(self):
+        import time
+
+        self.table.get_item.return_value = {
+            "Item": {
+                "requestId": "req-123",
+                "requesterId": "someone-else",
+                "permission": "s3-read-demo-bucket",
+                "status": "pending",
+                "durationMinutes": 60,
+            }
+        }
+
+        response = app.handler(
+            self.make_event(body={"decision": "approve"}), None
+        )
+
+        self.assertEqual(response["statusCode"], 200)
+        expires_at = json.loads(response["body"])["expiresAt"]
+        policy = json.loads(
+            self.iam.put_role_policy.call_args.kwargs["PolicyDocument"]
+        )
+        limit = policy["Statement"][0]["Condition"]["DateLessThan"][
+            "aws:CurrentTime"
+        ]
+        self.assertEqual(
+            limit,
+            time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(expires_at)),
+        )
+
+    def test_legacy_catalog_with_its_own_time_limit_is_refused(self):
+        from unittest.mock import patch
+
+        self.table.get_item.return_value = {
+            "Item": {
+                "requestId": "req-123",
+                "requesterId": "someone-else",
+                "permission": "s3-read-demo-bucket",
+                "status": "pending",
+                "durationMinutes": 60,
+            }
+        }
+        limited_catalog = {
+            "s3-read-demo-bucket": {
+                "Effect": "Allow",
+                "Action": ["s3:GetObject"],
+                "Resource": "arn:aws:s3:::demo-bucket/*",
+                "Condition": {
+                    "DateLessThan": {"aws:CurrentTime": "2099-01-01T00:00:00Z"}
+                },
+            }
+        }
+
+        with patch.dict(app.PERMISSION_CATALOG, limited_catalog):
+            response = app.handler(
+                self.make_event(body={"decision": "approve"}), None
+            )
+
+        self.assertEqual(response["statusCode"], 500)
+        self.iam.put_role_policy.assert_not_called()
+        self.scheduler.create_schedule.assert_not_called()
+        self.table.update_item.assert_not_called()
 
     def test_unknown_permission_returns_500_without_granting_access(self):
         self.table.get_item.return_value = {
@@ -414,11 +549,54 @@ class ApproveAccessTests(unittest.TestCase):
         ]
         self.assertEqual(update_values[":status"], "scheduled")
         self.assertEqual(
+            self.table.update_item.call_args.kwargs["ConditionExpression"],
+            "#s = :pending",
+        )
+        self.assertEqual(
             update_values[":activate"], "jit-activate-req-123"
         )
         self.assertEqual(update_values[":sched"], "jit-revoke-req-123")
 
         self.sns.publish.assert_called_once()
+
+    def test_scheduled_approve_losing_the_race_returns_409_and_cleans_up(self):
+        import time
+        from botocore.exceptions import ClientError
+
+        start_epoch = int(time.time()) + 3600
+        end_epoch = start_epoch + 7200
+
+        self.table.get_item.return_value = {
+            "Item": {
+                "requestId": "req-123",
+                "permission": "s3-read-demo-bucket",
+                "status": "pending",
+                "accessStartAt": str(start_epoch),
+                "accessEndAt": str(end_epoch),
+            }
+        }
+        # Someone (for example a denier) changed the request after our read.
+        self.table.update_item.side_effect = ClientError(
+            {"Error": {"Code": "ConditionalCheckFailedException"}},
+            "UpdateItem",
+        )
+
+        response = app.handler(
+            self.make_event(body={"decision": "approve"}), None
+        )
+
+        self.assertEqual(response["statusCode"], 409)
+        self.iam.put_role_policy.assert_not_called()
+        # Both schedules created by this call are removed again.
+        deleted = [
+            c.kwargs["Name"]
+            for c in self.scheduler.delete_schedule.call_args_list
+        ]
+        self.assertEqual(
+            sorted(deleted),
+            ["jit-activate-req-123", "jit-revoke-req-123"],
+        )
+        self.sns.publish.assert_not_called()
 
     def test_future_window_revocation_schedule_failure_cleans_up_activation(self):
         from botocore.exceptions import ClientError
@@ -515,6 +693,127 @@ class ApproveAccessTests(unittest.TestCase):
         # The request must not be marked active.
         self.table.update_item.assert_not_called()
 
+    def test_rollback_failure_records_cleanup_pending(self):
+        from botocore.exceptions import ClientError
+
+        self.table.get_item.return_value = {
+            "Item": {
+                "requestId": "req-123",
+                "permission": "s3-read-demo-bucket",
+                "status": "pending",
+                "durationMinutes": 60,
+            }
+        }
+        self.scheduler.create_schedule.side_effect = ClientError(
+            {
+                "Error": {
+                    "Code": "InternalServerError",
+                    "Message": "Simulated scheduler failure",
+                }
+            },
+            "CreateSchedule",
+        )
+        self.iam.delete_role_policy.side_effect = ClientError(
+            {
+                "Error": {
+                    "Code": "AccessDenied",
+                    "Message": "Simulated rollback failure",
+                }
+            },
+            "DeleteRolePolicy",
+        )
+
+        response = app.handler(
+            self.make_event(body={"decision": "approve"}), None
+        )
+
+        self.assertEqual(response["statusCode"], 500)
+        body = json.loads(response["body"])
+        self.assertIn("cleanup", body["message"].lower())
+        self.table.update_item.assert_called_once()
+        cleanup_write = self.table.update_item.call_args.kwargs
+        self.assertIn("cleanup_pending", cleanup_write["UpdateExpression"])
+        self.assertIn("cleanupTargetStatus", cleanup_write["UpdateExpression"])
+        self.assertIn("cleanupNotBefore", cleanup_write["UpdateExpression"])
+        self.assertIn("policyName", cleanup_write["UpdateExpression"])
+        self.assertEqual(
+            cleanup_write["ConditionExpression"],
+            "(#s = :pending OR #s = :active)",
+        )
+        self.assertIn(":pending", cleanup_write["ExpressionAttributeValues"])
+        self.assertIn(":active", cleanup_write["ExpressionAttributeValues"])
+        self.sns.publish.assert_not_called()
+
+    def test_rollback_and_cleanup_record_failure_is_surfaced(self):
+        from botocore.exceptions import ClientError
+
+        self.table.get_item.return_value = {
+            "Item": {
+                "requestId": "req-123",
+                "permission": "s3-read-demo-bucket",
+                "status": "pending",
+                "durationMinutes": 60,
+            }
+        }
+        active_write_failure = ClientError(
+            {
+                "Error": {
+                    "Code": "InternalServerError",
+                    "Message": "Simulated active-status write failure",
+                }
+            },
+            "UpdateItem",
+        )
+        cleanup_write_failure = ClientError(
+            {
+                "Error": {
+                    "Code": "ProvisionedThroughputExceededException",
+                    "Message": "Simulated cleanup-record failure",
+                }
+            },
+            "UpdateItem",
+        )
+        self.table.update_item.side_effect = [
+            active_write_failure,
+            cleanup_write_failure,
+        ]
+        self.iam.delete_role_policy.side_effect = ClientError(
+            {
+                "Error": {
+                    "Code": "AccessDenied",
+                    "Message": "Simulated rollback failure",
+                }
+            },
+            "DeleteRolePolicy",
+        )
+        log_output = io.StringIO()
+
+        with redirect_stdout(log_output):
+            response = app.handler(
+                self.make_event(body={"decision": "approve"}), None
+            )
+
+        self.assertEqual(response["statusCode"], 500)
+        body = json.loads(response["body"])
+        self.assertEqual(
+            body["message"],
+            "Access may still be granted because rollback failed and "
+            "cleanup could not be recorded. Manual IAM verification is required.",
+        )
+        logs = log_output.getvalue()
+        self.assertIn("Could not save active request req-123", logs)
+        self.assertIn("Rollback delete_role_policy also failed", logs)
+        self.assertIn("Could not record cleanup for req-123", logs)
+        self.assertEqual(self.table.update_item.call_count, 2)
+        cleanup_write = self.table.update_item.call_args_list[1].kwargs
+        self.assertIn(":pending", cleanup_write["ExpressionAttributeValues"])
+        self.assertIn(":active", cleanup_write["ExpressionAttributeValues"])
+        self.sns.publish.assert_called_once()
+        alert = self.sns.publish.call_args.kwargs
+        self.assertIn("req-123", alert["Subject"])
+        self.assertIn("req-123", alert["Message"])
+        self.assertIn("jit-grant-req-123", alert["Message"])
+
     def test_iam_grant_failure_returns_500(self):
         from botocore.exceptions import ClientError
 
@@ -549,6 +848,61 @@ class ApproveAccessTests(unittest.TestCase):
 
         # The request should not be marked active.
         self.table.update_item.assert_not_called()
+
+    def test_legacy_duplicate_schedule_returns_409_and_keeps_the_grant(self):
+        from botocore.exceptions import ClientError
+
+        self.table.get_item.return_value = {
+            "Item": {
+                "requestId": "req-123",
+                "permission": "s3-read-demo-bucket",
+                "status": "pending",
+                "durationMinutes": 60,
+            }
+        }
+        self.scheduler.create_schedule.side_effect = ClientError(
+            {"Error": {"Code": "ConflictException"}}, "CreateSchedule"
+        )
+
+        response = app.handler(
+            self.make_event(body={"decision": "approve"}), None
+        )
+
+        self.assertEqual(response["statusCode"], 409)
+        # Never remove a grant that another approver may own.
+        self.iam.delete_role_policy.assert_not_called()
+        self.scheduler.delete_schedule.assert_not_called()
+        self.table.update_item.assert_not_called()
+        self.sns.publish.assert_not_called()
+
+    def test_legacy_approve_losing_the_race_returns_409_and_rolls_back(self):
+        from botocore.exceptions import ClientError
+
+        self.table.get_item.return_value = {
+            "Item": {
+                "requestId": "req-123",
+                "permission": "s3-read-demo-bucket",
+                "status": "pending",
+                "durationMinutes": 60,
+            }
+        }
+        self.table.update_item.side_effect = ClientError(
+            {"Error": {"Code": "ConditionalCheckFailedException"}},
+            "UpdateItem",
+        )
+
+        response = app.handler(
+            self.make_event(body={"decision": "approve"}), None
+        )
+
+        self.assertEqual(response["statusCode"], 409)
+        self.scheduler.delete_schedule.assert_called_once_with(
+            Name="jit-revoke-req-123", GroupName="ci-test-schedule-group"
+        )
+        self.iam.delete_role_policy.assert_called_once_with(
+            RoleName="ci-test-target-role", PolicyName="jit-grant-req-123"
+        )
+        self.sns.publish.assert_not_called()
 
 
 if __name__ == "__main__":
