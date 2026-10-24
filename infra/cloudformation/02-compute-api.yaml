@@ -39,8 +39,8 @@ Resources:
     Properties:
       Name: !Sub "${ProjectName}-${EnvName}-revocations"
 
-  # Role EventBridge Scheduler assumes to invoke revoke_access. Scoped to
-  # invoking exactly that one function - nothing else.
+  # Role EventBridge Scheduler assumes to invoke the scheduled access-window
+  # functions. Scoped to those two functions - nothing else.
   SchedulerInvocationRole:
     Type: AWS::IAM::Role
     Properties:
@@ -52,13 +52,16 @@ Resources:
             Principal: { Service: scheduler.amazonaws.com }
             Action: sts:AssumeRole
       Policies:
-        - PolicyName: invoke-revoke-only
+        - PolicyName: invoke-access-window-functions-only
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
               - Effect: Allow
                 Action: lambda:InvokeFunction
-                Resource: !GetAtt RevokeAccessFunction.Arn
+                Resource:
+                  - !GetAtt ActivateAccessFunction.Arn
+                  - !GetAtt RevokeAccessFunction.Arn
+                  - !GetAtt ReconcileCleanupFunction.Arn
 
   # ---------------- IAM: one scoped role per function ----------------
 
@@ -166,6 +169,45 @@ Resources:
                 Action: iam:DeleteRolePolicy
                 Resource: !ImportValue
                   Fn::Sub: "${ProjectName}-${EnvName}-TargetRoleArn"
+              - Sid: DeleteSchedulesInAccessWindowGroup
+                Effect: Allow
+                Action: scheduler:DeleteSchedule
+                Resource: !Sub "arn:aws:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/${ScheduleGroup}/*"
+              - Sid: PublishNotifications
+                Effect: Allow
+                Action: sns:Publish
+                Resource: !ImportValue
+                  Fn::Sub: "${ProjectName}-${EnvName}-NotificationsTopicArn"
+
+  ActivateAccessRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${EnvName}-activate-access-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: scoped-access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: WriteLogs
+                Effect: Allow
+                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+                Resource: "arn:aws:logs:*:*:*"
+              - Sid: ReadWriteRequestsTable
+                Effect: Allow
+                Action: [dynamodb:GetItem, dynamodb:UpdateItem]
+                Resource: !ImportValue
+                  Fn::Sub: "${ProjectName}-${EnvName}-RequestsTableArn"
+              - Sid: GrantOnlyOnTargetRole
+                Effect: Allow
+                Action: iam:PutRolePolicy
+                Resource: !ImportValue
+                  Fn::Sub: "${ProjectName}-${EnvName}-TargetRoleArn"
               - Sid: PublishNotifications
                 Effect: Allow
                 Action: sns:Publish
@@ -201,8 +243,80 @@ Resources:
                     - "${Arn}/index/*"
                     - Arn: { Fn::ImportValue: !Sub "${ProjectName}-${EnvName}-RequestsTableArn" }
 
+  # ---------------- Cleanup reconciler IAM role ----------------
+  ReconcileCleanupRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${EnvName}-reconcile-cleanup-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: reconcile-cleanup-scoped-access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: WriteLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "arn:aws:logs:*:*:*"
+              - Sid: ReadAndUpdateRequests
+                Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:UpdateItem
+                Resource: !ImportValue
+                  Fn::Sub: "${ProjectName}-${EnvName}-RequestsTableArn"
+              - Sid: QueryCleanupPendingIndexOnly
+                Effect: Allow
+                Action: dynamodb:Query
+                Resource: !Sub
+                  - "${TableArn}/index/status-index"
+                  - TableArn: !ImportValue
+                      Fn::Sub: "${ProjectName}-${EnvName}-RequestsTableArn"
+              - Sid: DeletePoliciesOnlyOnTargetRole
+                Effect: Allow
+                Action: iam:DeleteRolePolicy
+                Resource: !ImportValue
+                  Fn::Sub: "${ProjectName}-${EnvName}-TargetRoleArn"
+              - Sid: PublishCleanupNotifications
+                Effect: Allow
+                Action: sns:Publish
+                Resource: !ImportValue
+                  Fn::Sub: "${ProjectName}-${EnvName}-NotificationsTopicArn"
   # ---------------- Lambda functions ----------------
 
+  ReconcileCleanupFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${EnvName}-reconcile-cleanup"
+      Runtime: python3.12
+      Handler: app.handler
+      Timeout: 60
+      MemorySize: 256
+      Role: !GetAtt ReconcileCleanupRole.Arn
+      Code: ../../lambda/reconcile_cleanup
+      Environment:
+        Variables:
+          REQUESTS_TABLE_NAME: !ImportValue
+            Fn::Sub: "${ProjectName}-${EnvName}-RequestsTableName"
+          NOTIFICATIONS_TOPIC_ARN: !ImportValue
+            Fn::Sub: "${ProjectName}-${EnvName}-NotificationsTopicArn"
+          TARGET_ROLE_NAME: !ImportValue
+            Fn::Sub: "${ProjectName}-${EnvName}-TargetRoleName"
+
+  ReconcileCleanupLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ReconcileCleanupFunction}"
+      RetentionInDays: !Ref LogRetentionDays
   RequestAccessFunction:
     Type: AWS::Lambda::Function
     Properties:
@@ -246,11 +360,44 @@ Resources:
             Fn::Sub: "${ProjectName}-${EnvName}-NotificationsTopicArn"
           TARGET_ROLE_NAME: !ImportValue
             Fn::Sub: "${ProjectName}-${EnvName}-TargetRoleName"
+          SCHEDULE_GROUP_NAME: !Ref ScheduleGroup
 
   RevokeAccessLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub "/aws/lambda/${RevokeAccessFunction}"
+      RetentionInDays: !Ref LogRetentionDays
+
+  ActivateAccessFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${EnvName}-activate-access"
+      Runtime: python3.12
+      Handler: app.handler
+      Timeout: 15
+      MemorySize: 256
+      Role: !GetAtt ActivateAccessRole.Arn
+      Code: ../../lambda/activate_access
+      Environment:
+        Variables:
+          REQUESTS_TABLE_NAME: !ImportValue
+            Fn::Sub: "${ProjectName}-${EnvName}-RequestsTableName"
+          NOTIFICATIONS_TOPIC_ARN: !ImportValue
+            Fn::Sub: "${ProjectName}-${EnvName}-NotificationsTopicArn"
+          TARGET_ROLE_NAME: !ImportValue
+            Fn::Sub: "${ProjectName}-${EnvName}-TargetRoleName"
+          PERMISSION_CATALOG: !Sub
+            - >-
+              {"s3-read-demo-bucket":{"Effect":"Allow","Action":["s3:GetObject","s3:ListBucket"],"Resource":["${DemoBucketArn}","${DemoBucketArn}/*"]},"dynamodb-read-requests":{"Effect":"Allow","Action":["dynamodb:GetItem","dynamodb:Query"],"Resource":["${RequestsTableArn}","${RequestsTableArn}/index/*"]}}
+            - DemoBucketArn: !ImportValue
+                Fn::Sub: "${ProjectName}-${EnvName}-DemoBucketArn"
+              RequestsTableArn: !ImportValue
+                Fn::Sub: "${ProjectName}-${EnvName}-RequestsTableArn"
+
+  ActivateAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ActivateAccessFunction}"
       RetentionInDays: !Ref LogRetentionDays
 
   ApproveAccessFunction:
@@ -271,6 +418,7 @@ Resources:
             Fn::Sub: "${ProjectName}-${EnvName}-NotificationsTopicArn"
           TARGET_ROLE_NAME: !ImportValue
             Fn::Sub: "${ProjectName}-${EnvName}-TargetRoleName"
+          ACTIVATE_FUNCTION_ARN: !GetAtt ActivateAccessFunction.Arn
           REVOKE_FUNCTION_ARN: !GetAtt RevokeAccessFunction.Arn
           SCHEDULER_ROLE_ARN: !GetAtt SchedulerInvocationRole.Arn
           SCHEDULE_GROUP_NAME: !Ref ScheduleGroup
@@ -453,6 +601,36 @@ Resources:
       Principal: scheduler.amazonaws.com
       SourceArn: !Sub "arn:aws:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/${ScheduleGroup}/*"
 
+  ActivateAccessSchedulerInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ActivateAccessFunction
+      Action: lambda:InvokeFunction
+      Principal: scheduler.amazonaws.com
+      SourceArn: !Sub "arn:aws:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/${ScheduleGroup}/*"
+
+  ReconcileCleanupSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: !Sub "${ProjectName}-${EnvName}-reconcile-cleanup"
+      GroupName: !Ref ScheduleGroup
+      Description: Periodically reconcile requests awaiting access-policy cleanup
+      State: ENABLED
+      FlexibleTimeWindow:
+        Mode: "OFF"
+      ScheduleExpression: rate(5 minutes)
+      Target:
+        Arn: !GetAtt ReconcileCleanupFunction.Arn
+        RoleArn: !GetAtt SchedulerInvocationRole.Arn
+        Input: "{}"
+
+  ReconcileCleanupSchedulerInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ReconcileCleanupFunction
+      Action: lambda:InvokeFunction
+      Principal: scheduler.amazonaws.com
+      SourceArn: !GetAtt ReconcileCleanupSchedule.Arn
   HttpApiStage:
     Type: AWS::ApiGatewayV2::Stage
     Properties:
@@ -471,5 +649,7 @@ Outputs:
     Value: !Ref ApproveAccessFunction
   RevokeAccessFunctionName:
     Value: !Ref RevokeAccessFunction
+  ActivateAccessFunctionName:
+    Value: !Ref ActivateAccessFunction
   ListRequestsFunctionName:
     Value: !Ref ListRequestsFunction
