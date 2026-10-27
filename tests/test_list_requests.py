@@ -72,6 +72,8 @@ class ListRequestsTests(unittest.TestCase):
                     "permission": "s3-read-demo-bucket",
                     "reason": "Need S3 access",
                     "durationMinutes": 60,
+                    "accessStartAt": "2026-10-27T12:00:00Z",
+                    "accessEndAt": "2026-10-27T13:00:00Z",
                     "status": "pending",
                     "requestedAt": "1000",
                 }
@@ -89,6 +91,8 @@ class ListRequestsTests(unittest.TestCase):
         self.assertEqual(body["mode"], "mine")
         self.assertEqual(len(body["requests"]), 1)
         self.assertEqual(body["requests"][0]["requestId"], "req-123")
+        self.assertEqual(body["requests"][0]["accessStartAt"], "2026-10-27T12:00:00Z")
+        self.assertEqual(body["requests"][0]["accessEndAt"], "2026-10-27T13:00:00Z")
 
         self.table.query.assert_called_once()
 

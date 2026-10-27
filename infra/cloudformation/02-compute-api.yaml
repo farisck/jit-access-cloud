@@ -208,6 +208,11 @@ Resources:
                 Action: iam:PutRolePolicy
                 Resource: !ImportValue
                   Fn::Sub: "${ProjectName}-${EnvName}-TargetRoleArn"
+              - Sid: RemoveOwnGrantOnRace
+                Effect: Allow
+                Action: iam:DeleteRolePolicy
+                Resource: !ImportValue
+                  Fn::Sub: "${ProjectName}-${EnvName}-TargetRoleArn"
               - Sid: PublishNotifications
                 Effect: Allow
                 Action: sns:Publish
@@ -630,7 +635,7 @@ Resources:
       FunctionName: !Ref ReconcileCleanupFunction
       Action: lambda:InvokeFunction
       Principal: scheduler.amazonaws.com
-      SourceArn: !GetAtt ReconcileCleanupSchedule.Arn
+      SourceArn: !Sub "arn:aws:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/${ScheduleGroup}/*"
   HttpApiStage:
     Type: AWS::ApiGatewayV2::Stage
     Properties:

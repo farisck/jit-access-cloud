@@ -171,6 +171,20 @@ class StaleActivatingRecoveryTests(unittest.TestCase):
         self.assertEqual(outcome, "skipped")
         self.table.update_item.assert_not_called()
 
+    def test_unexpected_recovery_write_error_is_reported_as_failed(self):
+        self.table.update_item.side_effect = ClientError(
+            {"Error": {"Code": "ProvisionedThroughputExceededException"}},
+            "UpdateItem",
+        )
+        item = self.activating_item()
+
+        outcome = self.reconcile(item)
+
+        self.assertEqual(outcome, "failed")
+        self.table.update_item.assert_called_once()
+        self.iam.delete_role_policy.assert_not_called()
+        self.sns.publish.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
