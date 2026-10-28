@@ -1,6 +1,6 @@
 # JIT Access Manager: Demo Script
 
-A walkthrough of the full request, approve, expire and revoke lifecycle. All commands are PowerShell, run from the repo root.
+A walkthrough of the full request, schedule, activate, expire and revoke lifecycle. All commands are PowerShell, run from the repo root.
 
 ## Setup
 
@@ -67,10 +67,23 @@ Expected: `"PolicyNames": []`
 
 ## 2. Employee requests a time-boxed permission
 
+Access requests name a start and end time. Both must be in the future,
+include a timezone, and span a whole number of minutes. This builds a window
+that starts 5 minutes from now and lasts 15 minutes:
+
 ```powershell
+$start = (Get-Date).ToUniversalTime().AddMinutes(5)
+$end   = $start.AddMinutes(15)
+$body  = @{
+  permission    = "s3-read-demo-bucket"
+  reason        = "demo walkthrough"
+  accessStartAt = $start.ToString("yyyy-MM-ddTHH:mm:ssZ")
+  accessEndAt   = $end.ToString("yyyy-MM-ddTHH:mm:ssZ")
+} | ConvertTo-Json
+
 $new = Invoke-RestMethod -Method Post -Uri "$API/requests" `
   -Headers @{ Authorization = "Bearer $EMP" } -ContentType "application/json" `
-  -Body '{"permission":"s3-read-demo-bucket","durationMinutes":15,"reason":"demo walkthrough"}'
+  -Body $body
 $new
 ```
 
@@ -98,19 +111,24 @@ Invoke-RestMethod -Method Post -Uri "$API/requests/$($new.requestId)/approve" `
   -Body '{"decision":"approve"}'
 ```
 
-Expected: `status: active` with an `expiresAt` timestamp.
+Expected: `status: scheduled`, with `accessStartAt` and `accessEndAt`. Approve before the start time, because approval is rejected once the start has passed. Nothing is granted yet.
 
-## 5. The grant is real
+## 5. The grant appears at the start time, not before
+
+Right after approval:
 
 ```powershell
 aws iam list-role-policies --role-name jit-access-dev-target-role
 ```
 
-Expected: one policy named `jit-grant-<requestId>`.
+Expected: `"PolicyNames": []`. Approval created two schedules but granted nothing.
+
+Wait until the start time has passed (about 5 minutes), then run it again.
+Expected: one policy named `jit-grant-<requestId>`, and the request shows `status: active`.
 
 ## 6. Automatic revocation
 
-Wait for the 15-minute duration to pass, with no manual action, then:
+Wait for the end time to pass, with no manual action, then:
 
 ```powershell
 aws iam list-role-policies --role-name jit-access-dev-target-role
@@ -129,12 +147,21 @@ revokedBy : scheduler
 
 ## 7. Manual early revoke
 
-Create a 15-minute request, approve it as the manager, then revoke it:
+Create a request that starts in 3 minutes (same `$start`/`$end` pattern as step 2, with `AddMinutes(3)`), approve it as the manager, wait until it is active, then revoke it:
 
 ```powershell
+$start = (Get-Date).ToUniversalTime().AddMinutes(3)
+$end   = $start.AddMinutes(15)
+$body  = @{
+  permission    = "s3-read-demo-bucket"
+  reason        = "early revoke demo"
+  accessStartAt = $start.ToString("yyyy-MM-ddTHH:mm:ssZ")
+  accessEndAt   = $end.ToString("yyyy-MM-ddTHH:mm:ssZ")
+} | ConvertTo-Json
+
 $new = Invoke-RestMethod -Method Post -Uri "$API/requests" `
   -Headers @{ Authorization = "Bearer $EMP" } -ContentType "application/json" `
-  -Body '{"permission":"s3-read-demo-bucket","durationMinutes":15,"reason":"early revoke demo"}'
+  -Body $body
 
 Invoke-RestMethod -Method Post -Uri "$API/requests/$($new.requestId)/approve" `
   -Headers @{ Authorization = "Bearer $TOKEN" } -ContentType "application/json" `
@@ -148,7 +175,9 @@ Invoke-RestMethod -Method Delete -Uri "$API/requests/$($new.requestId)" `
 aws iam list-role-policies --role-name jit-access-dev-target-role
 ```
 
-Expected: `status: revoked_early`, the policy disappears immediately, and the row shows the manager in `revokedBy`. The original schedule still fires later and is a harmless no-op, because `revoke_access` is idempotent.
+Expected: `status: revoked_early`, the policy disappears immediately, and the row shows the manager in `revokedBy`. Manual revoke also cancels the request's schedules.
+
+If you revoke a request while it's still `scheduled`, nothing was ever granted, so there's no policy to remove, and the status goes straight to `revoked_early`.
 
 ## 8. Employee views their own history
 
@@ -169,9 +198,12 @@ aws cloudwatch set-alarm-state --alarm-name jit-access-dev-revoke-failed `
 
 Expected: an `ALARM: "jit-access-dev-revoke-failed"` email within a minute, provided the SNS topic has a confirmed email subscription. In production, the alarm fires when the `revoke_access` Lambda reports an error, indicating that a privileged grant may still be active.
 
+There are three alarms: `jit-access-dev-revoke-failed`, `jit-access-dev-activate-failed` and `jit-access-dev-reconcile-cleanup-failed`. Each fires when its Lambda reports an error.
+
 ## Key design points to mention
 
 - Requests come from a fixed catalog of safe, read-only permissions, never arbitrary IAM JSON.
-- Approval attaches one scoped inline policy and creates the EventBridge Scheduler revoke in the same action.
+- Approval schedules activation and revocation; the scoped inline policy exists only between the start and end times, and every grant also carries an `aws:CurrentTime` limit.
+- A cleanup reconciler runs every 5 minutes and finishes any revocation that could not be completed safely.
 - Every request keeps an audit trail: requester, approver, timestamps, and who revoked it.
 - Genuine IAM failures during revocation are re-raised so they surface as Lambda errors and trigger the CloudWatch alarm.
