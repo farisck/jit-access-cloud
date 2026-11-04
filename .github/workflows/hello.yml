@@ -12,6 +12,7 @@ jobs:
       NOTIFICATIONS_TOPIC_ARN: "arn:aws:sns:us-east-1:000000000000"
       TARGET_ROLE_NAME: "ci-test-target-role"
       REVOKE_FUNCTION_ARN: "arn:aws:lambda:us-east-1:000000000000:function"
+      ACTIVATE_FUNCTION_ARN: "arn:aws:lambda:us-east-1:000000000000:function:ci-test-activate-access"
       SCHEDULER_ROLE_ARN: "arn:aws:iam::000000000000/ci-test-scheduler-role"
       SCHEDULE_GROUP_NAME: "ci-test-schedule-group"
       PERMISSION_CATALOG: '["s3-read-demo-bucket", "dynamodb-read-requests"]'
@@ -37,6 +38,7 @@ jobs:
       - name: Test Lambda imports
         run: |
           python -c "import sys; sys.path.insert(0, 'lambda/approve_access'); import app"
+          python -c "import sys; sys.path.insert(0, 'lambda/activate_access'); import app"
           python -c "import sys; sys.path.insert(0, 'lambda/list_requests'); import app"
           python -c "import sys; sys.path.insert(0, 'lambda/request_access'); import app"
           python -c "import sys; sys.path.insert(0, 'lambda/revoke_access'); import app"

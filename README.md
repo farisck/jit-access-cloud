@@ -6,12 +6,12 @@
 
 A just-in-time privileged access platform on AWS — Cloud Computing capstone project.
 
-An employee requests a specific, time-boxed elevated permission. A manager
-approves or denies it. If approved, the permission is granted immediately
-and **automatically revoked at the exact requested expiry**, with no manual
-cleanup step anyone could forget. Every request, grant, and revocation is
-logged in DynamoDB, and independently visible in the account's CloudTrail
-history (see note below).
+An employee requests a specific, time-boxed elevated permission for a chosen
+access window (a start and an end time). A manager approves or denies it. If
+approved, the permission is granted automatically at the start time and
+**automatically revoked at the end time**, with no manual cleanup step anyone
+could forget. Every request, grant, and revocation is logged in DynamoDB, and
+independently visible in the account's CloudTrail history (see note below).
 
 **Live demo:** https://jit.barfs.shop
 
@@ -39,9 +39,46 @@ fixed **permission catalog** defined in the CloudFormation template:
 - `dynamodb-read-requests` — read-only access to the requests table itself
 
 Grants attach to a single, dedicated `TargetRole` that starts with **zero**
-permissions. `approve_access` adds exactly one inline policy per grant;
-`revoke_access` removes exactly that one policy. Nothing in this system can
-ever touch any other role, user, or resource in the account.
+permissions. Each grant is exactly one inline policy named
+`jit-grant-<requestId>`. It is added by `activate_access` at the start time
+(or by `approve_access` for the older duration-only requests) and removed by
+`revoke_access`, with `reconcile_cleanup` as a fallback. Nothing in this
+system can ever touch any other role, user, or resource in the account.
+
+## Access windows
+
+A request names a permission, a reason, and an access window. The start and
+end must be in the future when the request is made, include a timezone, and
+span a whole number of minutes. The window length is capped (8 hours by
+default). The older duration-only request (grant now for N minutes) is still
+accepted by the API.
+
+| Status | Meaning |
+|---|---|
+| Pending | Waiting for a manager |
+| Scheduled | Approved; nothing is granted until the start time |
+| Active | The grant exists on the target role until the window ends |
+| Expired | The window ended and the grant was removed |
+| Revoked | Ended early by an approver or the requester |
+| Denied | Rejected by a manager; nothing was granted |
+
+Behind the scenes there are two short-lived internal states, `activating`
+and `cleanup_pending`, used while access is being granted or removed.
+
+Rules worth knowing:
+
+- A request must be approved **before** its start time. After that, approval is rejected.
+- Approvers cannot approve their own requests.
+- Only an approver or the original requester can revoke a grant.
+
+## How access is kept safe
+
+- **Time-limited policies.** Every granted statement carries an `aws:CurrentTime` condition equal to the approved end time, so a grant that lands late can never authorize requests after the window.
+- **Race-safe state changes.** Status changes are conditional writes in DynamoDB, so activation, revocation and approval cannot overwrite each other.
+- **Cleanup reconciler.** `reconcile_cleanup` runs every 5 minutes. It deletes only the request's own `jit-grant-<requestId>` policy and finalizes a request only after two clean passes at least 30 seconds apart. It also recovers activations stuck past their deadline when a revocation was requested.
+- **Safe to repeat.** Revoking an already-ended request does nothing, and a missing policy counts as already removed.
+- **Loud failures.** CloudWatch alarms notify the SNS topic when activation, revocation or the reconciler raise an error.
+- **Least privilege per function.** Each Lambda has its own role. `request_access` cannot touch IAM at all.
 
 ## Architecture
 
@@ -49,11 +86,13 @@ ever touch any other role, user, or resource in the account.
 
 ```
 Employee → Cognito → API Gateway → request_access → DynamoDB (pending) → SNS (notify approver)
-Manager  → Cognito → API Gateway → approve_access  → IAM (grant) + EventBridge Scheduler (schedule revoke)
-                                                    ↓ (at expiry, automatically)
-                                        EventBridge Scheduler → revoke_access → IAM (revoke) → DynamoDB (expired)
-                                                                              ↓
-                                          CloudWatch alarm on failed revocations · account-wide CloudTrail
+Manager  → Cognito → API Gateway → approve_access → DynamoDB (scheduled) + EventBridge Scheduler (activation + revocation)
+                                                    ↓ at the start time
+                              EventBridge Scheduler → activate_access → IAM (grant) → DynamoDB (active)
+                                                    ↓ at the end time, or on manual revoke
+                              EventBridge Scheduler → revoke_access → IAM (revoke) → DynamoDB (expired / revoked early)
+Every 5 minutes:  EventBridge Scheduler → reconcile_cleanup → finishes any revocation that could not be completed safely
+                              CloudWatch alarms on failed activation, revocation and cleanup · account-wide CloudTrail
 ```
 
 Frontend delivery:
@@ -71,10 +110,10 @@ instead of calling the API directly — see **Frontend** below.
 | Phase | What it builds | Status |
 |---|---|---|
 | 1 — Foundation | Cognito (+ approvers group), requests table, demo bucket, target IAM role, SNS | ✅ Deployed |
-| 2 — Compute | 4 Lambdas, HTTP API, Cognito authorizer, EventBridge Scheduler wiring | ✅ Deployed and tested end-to-end |
-| 3 — Monitoring | CloudWatch alarm on failed revocations | ✅ Deployed and tested |
+| 2 — Compute | 6 Lambdas, HTTP API, Cognito authorizer, EventBridge Scheduler wiring (scheduled activation and revocation, cleanup reconciler) | ✅ Deployed and tested end-to-end |
+| 3 — Monitoring | CloudWatch alarms on failed activation, revocation and cleanup | ✅ Deployed and tested |
 | 3 — Monitoring (cont.) | CloudTrail, AWS Budgets | ✅ Covered by an existing account-wide trail and budget (see note above) |
-| Frontend | Employee/manager dashboard (dark navy/cyan redesign) | ✅ Built, tested, and live |
+| Frontend | Employee/manager dashboard (light and dark modes) | ✅ Built, tested, and live |
 | Hosting | Private S3 bucket + CloudFront + ACM certificate + custom domain | ✅ Live at https://jit.barfs.shop |
 
 ## Repo layout
@@ -83,13 +122,15 @@ instead of calling the API directly — see **Frontend** below.
 jit-access-cloud/
 ├── infra/cloudformation/
 │   ├── 01-foundation.yaml    # Cognito, DynamoDB, demo bucket, target role, SNS
-│   ├── 02-compute-api.yaml   # 4 Lambdas + HTTP API + Cognito authorizer + Scheduler
-│   └── 03-monitoring.yaml    # CloudWatch alarm on failed revocations
+│   ├── 02-compute-api.yaml   # 6 Lambdas + HTTP API + Cognito authorizer + Scheduler
+│   └── 03-monitoring.yaml    # CloudWatch alarms: failed activation, revocation, cleanup
 ├── lambda/
 │   ├── request_access/       # POST /requests
 │   ├── approve_access/       # POST /requests/{id}/approve — the core grant logic
+│   ├── activate_access/      # EventBridge Scheduler target: grants access at the scheduled start time
 │   ├── revoke_access/        # DELETE /requests/{id} (manual) + EventBridge target (automatic)
-│   └── list_requests/        # GET /requests[?status=pending]
+│   ├── list_requests/        # GET /requests[?status=pending]
+│   └── reconcile_cleanup/    # Runs every 5 minutes: finishes revocations that could not be completed safely
 ├── frontend/
 │   ├── index.html            # Standalone employee/manager dashboard (no build step)
 │   ├── favicon.ico
@@ -172,12 +213,14 @@ aws cognito-idp admin-add-user-to-group --user-pool-id $POOL_ID --username manag
 ## Frontend
 
 The dashboard is a single file, `frontend/index.html`, with no build step or
-npm install. It uses a dark navy and cyan theme and a responsive layout that
-also works on phone-sized screens.
+npm install.
+
+It has light and dark modes (toggle in the sidebar) and a responsive layout
+that also works on phone-sized screens.
 
 What each user sees:
 
-- **Employee** — **My access**: a request form, active grants with a live countdown, and request history
+- **Employee** — **My access** (active grants with a live countdown and pending requests), **Request access** (permission, reason, and an access window with start and end times), and **History** (every request, with its access window and a **Details** timeline)
 - **Manager** (must be in the `approvers` Cognito group) — **Approvals** (pending queue with approve/deny), **Active grants** (with a revoke action), and **Access history** (expired, denied and revoked requests)
 
 | Manager: active grants | Manager: access history |
@@ -209,9 +252,14 @@ served through CloudFront over HTTPS at **https://jit.barfs.shop**. An ACM
 certificate in `us-east-1` provides TLS for the custom domain, and a CNAME
 record at the DNS provider (GoDaddy) points `jit` at the CloudFront domain.
 
-> Pushing to GitHub does **not** update the live site. The frontend is
-> uploaded to S3 manually (below). No automated deployment workflow is
-> configured.
+> **Two ways to deploy.** A push to `main` that changes anything under
+> `frontend/` runs the **Deploy Frontend** GitHub Actions workflow
+> (`.github/workflows/deploy-frontend.yml`). It uploads `index.html`,
+> `favicon.ico` and `favicon.svg` to S3 and invalidates CloudFront using
+> GitHub OIDC, with no stored AWS keys. Pushes to other branches do **not**
+> deploy anything, so changes made on a feature branch go live either when
+> the branch is merged to `main` or when you upload manually (below).
+> The frontend bucket is in `ap-south-1`.
 
 Replace the placeholders with your own values:
 
@@ -221,17 +269,20 @@ aws sts get-caller-identity
 
 # 2. Upload the page (no-cache so updates show up quickly)
 aws s3 cp frontend\index.html s3://<frontend-bucket>/index.html `
-  --content-type "text/html" --cache-control "no-cache" --region us-east-1
+  --content-type "text/html" --cache-control "no-cache" --region ap-south-1
 
-# 3. Upload the favicon
+# 3. Upload the favicons
 aws s3 cp frontend\favicon.ico s3://<frontend-bucket>/favicon.ico `
-  --content-type "image/vnd.microsoft.icon" --cache-control "public, max-age=86400" --region us-east-1
+  --content-type "image/vnd.microsoft.icon" --cache-control "max-age=86400" --region ap-south-1
+aws s3 cp frontend\favicon.svg s3://<frontend-bucket>/favicon.svg `
+  --content-type "image/svg+xml" --cache-control "max-age=86400" --region ap-south-1
 
 # 4. Clear CloudFront's cached copies
-aws cloudfront create-invalidation --distribution-id <distribution-id> --paths "/index.html" "/favicon.ico"
+aws cloudfront create-invalidation --distribution-id <distribution-id> `
+  --paths "/index.html" "/favicon.ico" "/favicon.svg"
 
-# 5. Check the invalidation status (wait for "Completed")
-aws cloudfront list-invalidations --distribution-id <distribution-id> --max-items 3
+# 5. Wait for the invalidation to finish (use the Id printed by step 4)
+aws cloudfront wait invalidation-completed --distribution-id <distribution-id> --id <invalidation-id>
 ```
 
 Verify the deployment:
@@ -249,11 +300,12 @@ up to an hour to show up on some networks.
 
 ## Testing and CI
 
-Backend logic is covered by Python unit tests in `tests/`, run automatically
-by GitHub Actions on every push. Coverage is reported to Codecov (badge at
-the top). At the last check, 42 unit tests passed with 96% coverage
-against a 90% threshold (per file: request_access 100%, revoke_access 96%,
-list_requests 95%, approve_access 94%).
+Backend logic is covered by Python unit tests in `tests/` (153 tests at the
+last full run), run automatically by GitHub Actions on every push. Coverage
+is reported to Codecov (badge at the top), and the CI run fails if coverage
+drops below 90%. The tests use mocked AWS clients, so they check the logic
+and the exact DynamoDB and IAM calls but not IAM permissions. Permissions
+are reviewed in the CloudFormation templates and checked on the live site.
 
 Run the tests locally from the repo root:
 
@@ -261,15 +313,22 @@ Run the tests locally from the repo root:
 python -m coverage run --include="lambda/*/app.py" -m unittest discover -s tests -v
 ```
 
+On Windows, with the project's virtual environment:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests
+```
+
 Manual end-to-end checks on the live site (employee and manager accounts):
 
 | Check | Expected result |
 |---|---|
 | Employee submits a request | Appears as **Pending** for the manager |
-| Manager approves | Status becomes **Active**, with a countdown |
+| Manager approves a request before its start time | Status becomes **Scheduled**, then **Active** at the start time |
+| Manager approves after the start time has passed | Rejected (the start must still be in the future) |
 | Manager denies | Status becomes **Denied**, no IAM grant created |
 | Manager revokes an active grant | Status becomes **Revoked** and the grant leaves Active grants |
-| Duration passes | Status becomes **Expired** automatically |
+| End time passes | Status becomes **Expired** automatically, and the policy is gone from the target role |
 | `aws iam list-role-policies --role-name jit-access-dev-target-role` after revoke/expiry | `"PolicyNames": []` |
 | Browser console (F12) | No errors |
 
@@ -279,13 +338,27 @@ For the full 9-step walkthrough (including IAM verification commands and
 the automatic-expiry check), see [`docs/DEMO.md`](docs/DEMO.md). Quick
 version:
 
-1. Sign in as the employee at https://jit.barfs.shop and submit a request (for example, 15 minutes, with a realistic reason)
-2. Sign in as the manager and approve it; confirm it shows under **Active grants**
-3. Confirm the grant is real: `aws iam list-role-policies --role-name jit-access-dev-target-role` shows one policy
-4. Either click **Revoke access**, or wait for the duration to pass
-5. Run the same IAM command again — `"PolicyNames": []`, with no manual cleanup
-6. Check **Access history** and DynamoDB — the request moved `pending` → `active` → `revoked` or `expired`, each with a timestamp
-7. Submit one more request and **deny** it as the manager to show the denied path
+1. Sign in as the employee at https://jit.barfs.shop, open **Request access**, and request a window that starts a few minutes from now (for example, start in 5 minutes, end 15 minutes later) with a realistic reason
+2. Sign in as the manager and approve it **before** the start time; the request shows as **Scheduled** under **Active grants**
+3. Check the role before the start: `aws iam list-role-policies --role-name jit-access-dev-target-role` shows `"PolicyNames": []`
+4. After the start time, run the same command: one policy named `jit-grant-<requestId>`, and the request is **Active** with a countdown
+5. Either click **Revoke access**, or wait for the end time
+6. Run the IAM command again — `"PolicyNames": []`, with no manual cleanup
+7. Open **History** and click **Details** on the request: the timeline shows requested, approved, scheduled window, access granted, and revoked or expired
+8. Submit one more request and **deny** it as the manager to show the denied path
+
+## Known limitations
+
+- **Activation race cleanup.** If a revocation lands while an activation is
+  in flight, `activate_access` tries to remove the policy it just attached.
+  `ActivateAccessRole` needs `iam:DeleteRolePolicy` (scoped to the target
+  role) for that. The template includes it, but the deployed stack only has it
+  after the compute stack is redeployed from the current files. Until then the
+  call is denied, the `activate-failed` alarm fires, and the reconciler removes
+  the policy within a few minutes.
+- **Stuck activations with no revocation on record.** If a request stays in
+  `activating` past its window and no revocation was ever requested, the
+  reconciler raises a one-time alert instead of guessing what to do.
 
 ## Tearing down
 

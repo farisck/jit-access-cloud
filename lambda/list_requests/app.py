@@ -109,6 +109,8 @@ def handler(event, context):
             "permission": i.get("permission"),
             "reason": i.get("reason"),
             "durationMinutes": i.get("durationMinutes"),
+            "accessStartAt": i.get("accessStartAt"),
+            "accessEndAt": i.get("accessEndAt"),
             "status": i.get("status"),
             "requestedAt": i.get("requestedAt"),
             "decidedBy": i.get("decidedBy"),

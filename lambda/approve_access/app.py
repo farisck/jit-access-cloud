@@ -1,29 +1,19 @@
+
 """
 approve_access
 
-API Gateway-triggered (POST /requests/{requestId}/approve), behind the
-Cognito JWT authorizer. The caller must be in the "approvers" Cognito
-group - checked here, not assumed from network position.
+Approves or denies JIT access requests.
 
-Body: { "decision": "approve" }  or  { "decision": "deny" }
+Immediate requests:
+  - Grant the catalog permission now.
+  - Schedule revocation at expiry.
 
-On approval:
-  1. Look up the permission template for the request's requested
-     "permission" key in PERMISSION_CATALOG (never arbitrary JSON - this
-     is what keeps the whole system safe to run in a real AWS account for
-     a demo: the set of grantable permissions is fixed and reviewed ahead
-     of time, not whatever text a requester typed).
-  2. Attach it as ONE inline policy on TARGET_ROLE_NAME, named after this
-     request's id, so it can be found and removed unambiguously later.
-  3. Schedule a ONE-TIME EventBridge Schedule that invokes revoke_access
-     at the exact requested expiry - the revocation is scheduled in the
-     same action as the grant, never a separate step someone could forget.
-  4. Update DynamoDB to "active" with the expiry and scheduler name.
-
-This function's IAM role can only PutRolePolicy on the one target role
-(not any other role in the account), and can only create schedules under
-this project's schedule group.
+Future-window requests:
+  - Schedule activation at accessStartAt.
+  - Schedule revocation at accessEndAt.
+  - Do not grant IAM permission before the start time.
 """
+import copy
 import json
 import os
 import time
@@ -40,12 +30,9 @@ TABLE_NAME = os.environ["REQUESTS_TABLE_NAME"]
 TOPIC_ARN = os.environ["NOTIFICATIONS_TOPIC_ARN"]
 TARGET_ROLE_NAME = os.environ["TARGET_ROLE_NAME"]
 REVOKE_FUNCTION_ARN = os.environ["REVOKE_FUNCTION_ARN"]
+ACTIVATE_FUNCTION_ARN = os.environ["ACTIVATE_FUNCTION_ARN"]
 SCHEDULER_ROLE_ARN = os.environ["SCHEDULER_ROLE_ARN"]
 SCHEDULE_GROUP_NAME = os.environ["SCHEDULE_GROUP_NAME"]
-
-# The fixed, reviewed catalog of what can ever be granted. Keys here MUST
-# match request_access's ALLOWED_PERMISSIONS (fed from the same source at
-# deploy time via the CloudFormation template).
 PERMISSION_CATALOG = json.loads(os.environ["PERMISSION_CATALOG"])
 
 table = dynamodb.Table(TABLE_NAME)
@@ -66,24 +53,186 @@ def _policy_name(request_id):
     return f"jit-grant-{request_id}"
 
 
+def _is_conditional_failure(exc):
+    return (
+        exc.response.get("Error", {}).get("Code")
+        == "ConditionalCheckFailedException"
+    )
+
+
+def _record_rollback_cleanup(request_id, policy_name, not_before):
+    """Make failed IAM rollback discoverable without overwriting other states."""
+    try:
+        table.update_item(
+            Key={"requestId": request_id},
+            UpdateExpression=(
+                "SET #s = :cleanup_pending, cleanupTargetStatus = :target, "
+                "cleanupNotBefore = :not_before, policyName = :policy"
+            ),
+            ConditionExpression="(#s = :pending OR #s = :active)",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={
+                ":cleanup_pending": "cleanup_pending",
+                ":target": "expired",
+                ":not_before": str(not_before),
+                ":policy": policy_name,
+                ":pending": "pending",
+                ":active": "active",
+            },
+        )
+    except ClientError as exc:
+        if _is_conditional_failure(exc):
+            try:
+                current = table.get_item(
+                    Key={"requestId": request_id},
+                    ConsistentRead=True,
+                ).get("Item")
+            except ClientError as read_exc:
+                print(
+                    f"Could not verify cleanup conflict for {request_id}: "
+                    f"{read_exc}"
+                )
+                return False
+
+            if (
+                current
+                and current.get("status") == "cleanup_pending"
+                and current.get("cleanupTargetStatus") == "expired"
+                and str(current.get("cleanupNotBefore")) == str(not_before)
+                and current.get("policyName") == policy_name
+            ):
+                return True
+
+        print(f"Could not record cleanup for {request_id}: {exc}")
+        return False
+    return True
+
+
+def _alert_unrecorded_rollback(request_id, policy_name):
+    """Loud alert: a grant may be live and nothing recorded it for cleanup."""
+    try:
+        sns.publish(
+            TopicArn=TOPIC_ARN,
+            Subject=f"URGENT: grant may still be live for {request_id}"[:100],
+            Message=(
+                f"requestId={request_id}\n"
+                f"policy={policy_name}\n"
+                f"Rollback failed and cleanup could not be recorded. "
+                f"Check the target role's inline policies now."
+            ),
+        )
+    except ClientError as exc:
+        print(f"SNS publish failed (non-fatal): {exc}")
+
+
+def _rollback_grant(request_id, policy_name, not_before):
+    try:
+        iam.delete_role_policy(
+            RoleName=TARGET_ROLE_NAME,
+            PolicyName=policy_name,
+        )
+    except ClientError as rollback_exc:
+        print(f"Rollback delete_role_policy also failed: {rollback_exc}")
+        recorded = _record_rollback_cleanup(
+            request_id, policy_name, not_before
+        )
+        if recorded is False:
+            _alert_unrecorded_rollback(request_id, policy_name)
+        return recorded
+    return None
+
+
+def _time_limited_statement(statement, end_epoch):
+    """Copy a catalog statement and make it stop matching at end_epoch."""
+    if not isinstance(statement, dict):
+        raise ValueError("Catalog entry must be a policy statement object")
+
+    limited = copy.deepcopy(statement)
+    condition = limited.setdefault("Condition", {})
+    if not isinstance(condition, dict):
+        raise ValueError("Catalog Condition must be an object")
+
+    date_less_than = condition.setdefault("DateLessThan", {})
+    if (
+        not isinstance(date_less_than, dict)
+        or "aws:CurrentTime" in date_less_than
+    ):
+        raise ValueError(
+            "Catalog entry already limits aws:CurrentTime; "
+            "refusing to guess which limit wins"
+        )
+
+    date_less_than["aws:CurrentTime"] = time.strftime(
+        "%Y-%m-%dT%H:%M:%SZ", time.gmtime(end_epoch)
+    )
+    return limited
+
+
 def _parse_groups_claim(groups_raw):
-    """
-    Cognito's ID token has cognito:groups as a real JSON array, e.g.
-    ["approvers"]. But API Gateway's HTTP API JWT authorizer flattens all
-    claims into a string-only map before handing them to Lambda, and for
-    array claims it uses Java's array toString format - literal square
-    brackets, comma-space separated, NOT JSON (e.g. "[approvers]" or
-    "[approvers, admins]" for multiple groups, or "[]" for none). A naive
-    comma-split leaves the brackets attached to the token's first/last
-    entry, so "approvers" never matches "[approvers]" and every approver
-    gets incorrectly denied. This strips the brackets before splitting.
-    """
     if isinstance(groups_raw, list):
         return groups_raw
+
     cleaned = str(groups_raw).strip()
     if cleaned.startswith("[") and cleaned.endswith("]"):
         cleaned = cleaned[1:-1]
-    return [g.strip() for g in cleaned.split(",") if g.strip()]
+
+    return [group.strip() for group in cleaned.split(",") if group.strip()]
+
+
+def _schedule(name, timestamp, target_arn, request_id, reason=None):
+    """Create a one-time UTC schedule."""
+    timestamp = int(timestamp)
+    expression_time = time.strftime(
+        "%Y-%m-%dT%H:%M:%S",
+        time.gmtime(timestamp),
+    )
+
+    payload = {"requestId": request_id}
+    if reason:
+        payload["reason"] = reason
+
+    scheduler.create_schedule(
+        Name=name,
+        GroupName=SCHEDULE_GROUP_NAME,
+        ScheduleExpression=f"at({expression_time})",
+        FlexibleTimeWindow={"Mode": "OFF"},
+        ActionAfterCompletion="DELETE",
+        Target={
+            "Arn": target_arn,
+            "RoleArn": SCHEDULER_ROLE_ARN,
+            "Input": json.dumps(payload),
+        },
+    )
+
+
+def _delete_schedule(name):
+    """Best-effort cleanup for a schedule created by this invocation."""
+    try:
+        scheduler.delete_schedule(
+            Name=name,
+            GroupName=SCHEDULE_GROUP_NAME,
+        )
+    except ClientError as exc:
+        print(f"Could not clean up schedule {name}: {exc}")
+
+
+def _notify(item, new_status, actor, expires_epoch=None):
+    try:
+        message = (
+            f"requestId={item['requestId']}\n"
+            f"status={new_status}\n"
+            f"actedBy={actor}"
+        )
+        if expires_epoch is not None:
+            message += f"\nexpiresAt={expires_epoch}"
+
+        sns.publish(
+            TopicArn=TOPIC_ARN,
+            Subject=f"Access request {new_status}: {item['requestId']}"[:100],
+            Message=message,
+        )
+    except ClientError as exc:
+        print(f"SNS publish failed (non-fatal): {exc}")
 
 
 def handler(event, context):
@@ -91,13 +240,15 @@ def handler(event, context):
         claims = event["requestContext"]["authorizer"]["jwt"]["claims"]
         approver_id = claims["sub"]
         approver_email = claims.get("email", "")
-        groups_raw = claims.get("cognito:groups", "")
-        groups = _parse_groups_claim(groups_raw)
+        groups = _parse_groups_claim(claims.get("cognito:groups", ""))
     except (KeyError, TypeError):
         return _response(401, {"message": "Missing or invalid authorization token"})
 
     if "approvers" not in groups:
-        return _response(403, {"message": "Only members of the approvers group may approve or deny requests"})
+        return _response(
+            403,
+            {"message": "Only members of the approvers group may approve or deny requests"},
+        )
 
     request_id = (event.get("pathParameters") or {}).get("requestId")
     if not request_id:
@@ -105,113 +256,318 @@ def handler(event, context):
 
     try:
         payload = json.loads(event.get("body") or "{}")
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, TypeError):
         return _response(400, {"message": "Request body must be valid JSON"})
+
+    if not isinstance(payload, dict):
+        return _response(400, {"message": "Request body must be a JSON object"})
 
     decision = payload.get("decision")
     if decision not in ("approve", "deny"):
         return _response(400, {"message": "'decision' must be 'approve' or 'deny'"})
 
-    item_resp = table.get_item(Key={"requestId": request_id})
-    item = item_resp.get("Item")
+    item_response = table.get_item(
+        Key={"requestId": request_id},
+        ConsistentRead=True,
+    )
+    item = item_response.get("Item")
+
     if not item:
         return _response(404, {"message": "Request not found"})
+
     if item.get("status") != "pending":
-        return _response(409, {"message": f"Request is not pending (current status: {item.get('status')})"})
+        return _response(
+            409,
+            {"message": f"Request is not pending (current status: {item.get('status')})"},
+        )
+
+    if decision == "approve" and item.get("requesterId") == approver_id:
+        return _response(
+            403,
+            {"message": "Approvers cannot approve their own requests"},
+        )
 
     now_epoch = int(time.time())
+    actor = approver_email or approver_id
 
     if decision == "deny":
-        table.update_item(
-            Key={"requestId": request_id},
-            UpdateExpression="SET #s = :status, decidedBy = :by, decidedAt = :at",
-            ExpressionAttributeNames={"#s": "status"},
-            ExpressionAttributeValues={":status": "denied", ":by": approver_email or approver_id, ":at": str(now_epoch)},
-        )
-        _notify(item, "denied", approver_email or approver_id)
+        try:
+            table.update_item(
+                Key={"requestId": request_id},
+                UpdateExpression="SET #s = :status, decidedBy = :by, decidedAt = :at",
+                ConditionExpression="#s = :pending",
+                ExpressionAttributeNames={"#s": "status"},
+                ExpressionAttributeValues={
+                    ":status": "denied",
+                    ":pending": "pending",
+                    ":by": actor,
+                    ":at": str(now_epoch),
+                },
+            )
+        except ClientError as exc:
+            if _is_conditional_failure(exc):
+                return _response(
+                    409, {"message": "Request is no longer pending"}
+                )
+            raise
+        _notify(item, "denied", actor)
         return _response(200, {"requestId": request_id, "status": "denied"})
 
-    # --- approve ---
     permission_key = item.get("permission")
     policy_doc = PERMISSION_CATALOG.get(permission_key)
     if not policy_doc:
-        return _response(500, {"message": f"No policy template found for permission '{permission_key}'"})
+        return _response(
+            500,
+            {"message": f"No policy template found for permission '{permission_key}'"},
+        )
 
     policy_name = _policy_name(request_id)
-    duration_minutes = int(item.get("durationMinutes", 60))
+    has_start = item.get("accessStartAt") is not None
+    has_end = item.get("accessEndAt") is not None
+
+    # A future-window request must contain both boundaries.
+    if has_start != has_end:
+        return _response(
+            400,
+            {"message": "A scheduled access window requires both accessStartAt and accessEndAt"},
+        )
+
+    if has_start and has_end:
+        try:
+            start_epoch = int(item["accessStartAt"])
+            end_epoch = int(item["accessEndAt"])
+        except (TypeError, ValueError):
+            return _response(400, {"message": "Access window timestamps are invalid"})
+
+        if start_epoch <= now_epoch:
+            return _response(409, {"message": "Access start time must be in the future"})
+
+        if end_epoch <= start_epoch:
+            return _response(400, {"message": "Access end time must be after its start time"})
+
+        activate_name = f"jit-activate-{request_id}"
+        revoke_name = f"jit-revoke-{request_id}"
+        created_schedules = []
+
+        try:
+            _schedule(
+                activate_name,
+                start_epoch,
+                ACTIVATE_FUNCTION_ARN,
+                request_id,
+            )
+            created_schedules.append(activate_name)
+
+            _schedule(
+                revoke_name,
+                end_epoch,
+                REVOKE_FUNCTION_ARN,
+                request_id,
+                reason="scheduled_expiry",
+            )
+            created_schedules.append(revoke_name)
+
+        except ClientError as exc:
+            print(f"Could not create future-window schedules for {request_id}: {exc}")
+            for schedule_name in reversed(created_schedules):
+                _delete_schedule(schedule_name)
+
+            return _response(
+                500,
+                {"message": "Could not schedule the access window; access was not granted"},
+            )
+
+        try:
+            table.update_item(
+                Key={"requestId": request_id},
+                UpdateExpression=(
+                    "SET #s = :status, decidedBy = :by, decidedAt = :at, "
+                    "accessStartAt = :start, accessEndAt = :end, "
+                    "expiresAt = :exp, scheduleName = :sched, "
+                    "activationScheduleName = :activate, policyName = :pol"
+                ),
+                ConditionExpression="#s = :pending",
+                ExpressionAttributeNames={"#s": "status"},
+                ExpressionAttributeValues={
+                    ":status": "scheduled",
+                    ":pending": "pending",
+                    ":by": actor,
+                    ":at": str(now_epoch),
+                    ":start": str(start_epoch),
+                    ":end": str(end_epoch),
+                    ":exp": str(end_epoch),
+                    ":sched": revoke_name,
+                    ":activate": activate_name,
+                    ":pol": policy_name,
+                },
+            )
+        except ClientError as exc:
+            print(f"Could not save scheduled request {request_id}: {exc}")
+            for schedule_name in reversed(created_schedules):
+                _delete_schedule(schedule_name)
+
+            if _is_conditional_failure(exc):
+                return _response(
+                    409, {"message": "Request is no longer pending"}
+                )
+            return _response(
+                500,
+                {"message": "Could not save the scheduled access request"},
+            )
+
+        _notify(item, "scheduled", actor, end_epoch)
+        return _response(
+            200,
+            {
+                "requestId": request_id,
+                "status": "scheduled",
+                "accessStartAt": start_epoch,
+                "accessEndAt": end_epoch,
+            },
+        )
+
+    # Legacy duration-based requests: grant now and schedule revocation.
+    try:
+        duration_minutes = int(item.get("durationMinutes", 60))
+        if duration_minutes <= 0:
+            raise ValueError("durationMinutes must be positive")
+    except (TypeError, ValueError):
+        return _response(400, {"message": "Request duration is invalid"})
+
     expires_epoch = now_epoch + duration_minutes * 60
+
+    try:
+        policy_document = json.dumps({
+            "Version": "2012-10-17",
+            "Statement": [_time_limited_statement(policy_doc, expires_epoch)],
+        })
+    except ValueError as exc:
+        print(f"Invalid catalog entry for {request_id}: {exc}")
+        return _response(
+            500,
+            {"message": "Permission template is invalid; access was not granted"},
+        )
 
     try:
         iam.put_role_policy(
             RoleName=TARGET_ROLE_NAME,
             PolicyName=policy_name,
-            PolicyDocument=json.dumps({"Version": "2012-10-17", "Statement": [policy_doc]}),
+            PolicyDocument=policy_document,
         )
     except ClientError as exc:
         print(f"put_role_policy failed for {request_id}: {exc}")
         return _response(500, {"message": "Could not grant the requested access"})
 
-    # Schedule the revocation in the same action as the grant - EventBridge
-    # Scheduler's "at()" expression takes an ISO-8601 timestamp with no
-    # timezone offset (it's evaluated in the schedule's own timezone,
-    # UTC by default here).
-    expires_iso = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(expires_epoch))
     schedule_name = f"jit-revoke-{request_id}"
 
     try:
-        scheduler.create_schedule(
-            Name=schedule_name,
-            GroupName=SCHEDULE_GROUP_NAME,
-            ScheduleExpression=f"at({expires_iso})",
-            FlexibleTimeWindow={"Mode": "OFF"},
-            ActionAfterCompletion="DELETE",
-            Target={
-                "Arn": REVOKE_FUNCTION_ARN,
-                "RoleArn": SCHEDULER_ROLE_ARN,
-                "Input": json.dumps({"requestId": request_id, "reason": "scheduled_expiry"}),
+        _schedule(
+            schedule_name,
+            expires_epoch,
+            REVOKE_FUNCTION_ARN,
+            request_id,
+            reason="scheduled_expiry",
+        )
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "ConflictException":
+            print(
+                f"Revocation schedule for {request_id} already exists; "
+                f"another approval owns this request"
+            )
+            return _response(
+                409,
+                {"message": "Another approval is already in progress for this request"},
+            )
+        print(f"create_schedule failed for {request_id}: {exc}; rolling back the grant")
+        cleanup_recorded = _rollback_grant(
+            request_id, policy_name, expires_epoch
+        )
+        if cleanup_recorded is False:
+            return _response(
+                500,
+                {
+                    "message": (
+                        "Access may still be granted because rollback failed "
+                        "and cleanup could not be recorded. Manual IAM "
+                        "verification is required."
+                    )
+                },
+            )
+        if cleanup_recorded is True:
+            return _response(
+                500,
+                {
+                    "message": (
+                        "Could not schedule the automatic revocation; "
+                        "cleanup is pending for the reconciler"
+                    )
+                },
+            )
+
+        return _response(
+            500,
+            {"message": "Could not schedule the automatic revocation; grant was not applied"},
+        )
+
+    try:
+        table.update_item(
+            Key={"requestId": request_id},
+            UpdateExpression=(
+                "SET #s = :status, decidedBy = :by, decidedAt = :at, "
+                "expiresAt = :exp, scheduleName = :sched, policyName = :pol"
+            ),
+            ConditionExpression="#s = :pending",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={
+                ":status": "active",
+                ":pending": "pending",
+                ":by": actor,
+                ":at": str(now_epoch),
+                ":exp": str(expires_epoch),
+                ":sched": schedule_name,
+                ":pol": policy_name,
             },
         )
     except ClientError as exc:
-        # Roll back the grant rather than leave standing access with no
-        # revocation scheduled - that failure mode is exactly what this
-        # project exists to prevent.
-        print(f"create_schedule failed for {request_id}: {exc}; rolling back the grant")
-        try:
-            iam.delete_role_policy(RoleName=TARGET_ROLE_NAME, PolicyName=policy_name)
-        except ClientError as rollback_exc:
-            print(f"Rollback delete_role_policy also failed: {rollback_exc}")
-        return _response(500, {"message": "Could not schedule the automatic revocation; grant was not applied"})
+        print(f"Could not save active request {request_id}: {exc}")
+        _delete_schedule(schedule_name)
+        cleanup_recorded = _rollback_grant(
+            request_id, policy_name, expires_epoch
+        )
+        if cleanup_recorded is False:
+            return _response(
+                500,
+                {
+                    "message": (
+                        "Access may still be granted because rollback failed "
+                        "and cleanup could not be recorded. Manual IAM "
+                        "verification is required."
+                    )
+                },
+            )
+        if cleanup_recorded is True:
+            return _response(
+                500,
+                {
+                    "message": (
+                        "Could not save the approved access request; "
+                        "cleanup is pending for the reconciler"
+                    )
+                },
+            )
 
-    table.update_item(
-        Key={"requestId": request_id},
-        UpdateExpression=(
-            "SET #s = :status, decidedBy = :by, decidedAt = :at, "
-            "expiresAt = :exp, scheduleName = :sched, policyName = :pol"
-        ),
-        ExpressionAttributeNames={"#s": "status"},
-        ExpressionAttributeValues={
-            ":status": "active",
-            ":by": approver_email or approver_id,
-            ":at": str(now_epoch),
-            ":exp": str(expires_epoch),
-            ":sched": schedule_name,
-            ":pol": policy_name,
+        if _is_conditional_failure(exc):
+            return _response(
+                409, {"message": "Request is no longer pending"}
+            )
+        return _response(500, {"message": "Could not save the approved access request"})
+
+    _notify(item, "active", actor, expires_epoch)
+    return _response(
+        200,
+        {
+            "requestId": request_id,
+            "status": "active",
+            "expiresAt": expires_epoch,
         },
     )
-
-    _notify(item, "active", approver_email or approver_id, expires_epoch)
-    return _response(200, {"requestId": request_id, "status": "active", "expiresAt": expires_epoch})
-
-
-def _notify(item, new_status, actor, expires_epoch=None):
-    try:
-        msg = f"requestId={item['requestId']}\nstatus={new_status}\nactedBy={actor}"
-        if expires_epoch:
-            msg += f"\nexpiresAt={expires_epoch}"
-        sns.publish(
-            TopicArn=TOPIC_ARN,
-            Subject=f"Access request {new_status}: {item['requestId']}"[:100],
-            Message=msg,
-        )
-    except ClientError as exc:  # noqa: BLE001
-        print(f"SNS publish failed (non-fatal): {exc}")

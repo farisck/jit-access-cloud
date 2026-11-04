@@ -33,6 +33,55 @@ Resources:
       AlarmActions:
         - Fn::ImportValue: !Sub "${Project}-${Environment}-NotificationsTopicArn"
 
+  # Alerts when the cleanup reconciler raises an unhandled error.
+  ReconcileCleanupFailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${Project}-${Environment}-reconcile-cleanup-failed"
+      AlarmDescription: >-
+        The cleanup reconciler raised an error. Check its Lambda logs and
+        verify that pending access-policy cleanup is progressing.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub "${Project}-${Environment}-reconcile-cleanup"
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - Fn::ImportValue: !Sub "${Project}-${Environment}-NotificationsTopicArn"
+
+  # Alerts when activate_access raises (for example, a failed PutRolePolicy).
+  ActivateAccessFailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${Project}-${Environment}-activate-failed"
+      AlarmDescription: >-
+        activate_access raised an error. A scheduled grant may not have been
+        applied, so the requester may have no access for their window. Check
+        the Lambda logs and the request status in DynamoDB.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub "${Project}-${Environment}-activate-access"
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - Fn::ImportValue: !Sub "${Project}-${Environment}-NotificationsTopicArn"
+
 Outputs:
   RevokeFailureAlarmName:
     Value: !Ref RevokeFailureAlarm
+  ReconcileCleanupFailureAlarmName:
+    Value: !Ref ReconcileCleanupFailureAlarm
+  ActivateAccessFailureAlarmName:
+    Value: !Ref ActivateAccessFailureAlarm
